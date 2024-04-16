@@ -5,11 +5,9 @@ import sqlalchemy.types
 from sqlalchemy import orm
 from sqlalchemy.ext.hybrid import hybrid_property
 
-
-
 import util.ldac
 from util.util import ensure_file_does_not_exist
-from models.base import Base, SeeChangeBase, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners
+from models.base import Base, SeeChangeBase, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, _logger
 from models.enums_and_bitflags import CatalogExcerptFormatConverter, CatalogExcerptOriginConverter
 
 
@@ -144,6 +142,8 @@ class CatalogExcerpt(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourC
             if hasattr( self, key ):
                 setattr( self, key, value )
 
+        self.calculate_coordinates()
+
     @orm.reconstructor
     def init_on_load(self):
         Base.init_on_load( self )
@@ -186,7 +186,7 @@ class CatalogExcerpt(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourC
         catexp._data = tbl
         catexp._hdr = hdr
         catexp.num_items = len( tbl )
-        if origin == 'GaiaDR3':
+        if origin == 'gaia_dr3':
             catexp.filters = [ 'G', 'BP', 'RP' ]
             catexp.minmag = tbl[ 'MAG_G' ].min()
             catexp.maxmag = tbl[ 'MAG_G' ].max()
