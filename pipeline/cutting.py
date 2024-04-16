@@ -3,7 +3,7 @@ import sqlalchemy as sa
 
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
-from pipeline.utils import parse_session
+from util.util import parse_session
 
 from models.base import SmartSession
 from models.source_list import SourceList

@@ -8,7 +8,7 @@ from astropy.io import fits
 
 from models.base import FileOnDiskMixin
 
-import pipeline.utils
+from util.util import read_fits_image, save_fits_image_file
 
 # TODO : tests other than fits file reading/saving
 
@@ -22,7 +22,7 @@ def fits_file():
     hdr[ 'TEST1' ] = 'testing 1'
     hdr[ 'TEST2' ] = 'testing 2'
 
-    savedpath = pathlib.Path( pipeline.utils.save_fits_image_file( str(filepath), data, hdr ) )
+    savedpath = pathlib.Path( save_fits_image_file( str(filepath), data, hdr ) )
 
     yield filepath, savedpath
 
@@ -38,7 +38,7 @@ def fits_single_file():
     hdr[ 'TEST1' ] = 'testing 1'
     hdr[ 'TEST2' ] = 'testing 2'
 
-    savedpath = pathlib.Path( pipeline.utils.save_fits_image_file( str(filepath), data, hdr,
+    savedpath = pathlib.Path( save_fits_image_file( str(filepath), data, hdr,
                                                                    extname='image', single_file=True ) )
 
     yield filepath, savedpath
@@ -55,13 +55,13 @@ def two_extension_fits_file():
     hdr[ 'TEST1' ] = 'testing 64'
     hdr[ 'TEST2' ] = 'testing 128'
 
-    savedpath1 = pipeline.utils.save_fits_image_file( str(filepath), data, hdr, extname='image', single_file=True )
+    savedpath1 = save_fits_image_file( str(filepath), data, hdr, extname='image', single_file=True )
 
     data = np.full( (64, 32), 2.718, dtype=np.float32 )
     hdr[ 'TEST1' ] = 'Rosencrantz'
     hdr[ 'TEST2' ] = 'Guildenstern'
 
-    savedpath2 = pipeline.utils.save_fits_image_file( str(filepath), data, hdr, extname='weight', single_file=True )
+    savedpath2 = save_fits_image_file( str(filepath), data, hdr, extname='weight', single_file=True )
 
     assert savedpath1 == savedpath2
 
@@ -94,7 +94,7 @@ def test_save_separate_extension( fits_file ):
     hdr[ 'EXTTEST2' ] = 'extension testing 2'
 
     try:
-        pipeline.utils.save_fits_image_file( str(filepath), data, hdr, extname='next' )
+        save_fits_image_file( str(filepath), data, hdr, extname='next' )
 
         with fits.open( fullpath ) as ifp:
             assert ifp[0].header['TEST1'] == 'testing 1'
@@ -117,7 +117,7 @@ def test_save_extension( fits_single_file ):
     hdr[ 'EXTTEST1' ] = 'extension testing 1'
     hdr[ 'EXTTEST2' ] = 'extension testing 2'
 
-    pipeline.utils.save_fits_image_file( str(filepath), data, hdr, extname='next', single_file=True )
+    save_fits_image_file( str(filepath), data, hdr, extname='next', single_file=True )
 
     with fits.open( fullpath ) as ifp:
         assert ifp[1].header['TEST1'] == 'testing 1'
@@ -142,7 +142,7 @@ def test_no_overwrite( fits_file ):
     hdr[ 'TEST2' ] = 'testing 64738'
 
     with pytest.raises( OSError, match='File.*already exists' ):
-        savedpath = pathlib.Path( pipeline.utils.save_fits_image_file( str(filepath), data, hdr, overwrite=False ) )
+        savedpath = pathlib.Path( save_fits_image_file( str(filepath), data, hdr, overwrite=False ) )
     with fits.open( fullpath ) as ifp:
         assert ifp[0].header['TEST1'] == 'testing 1'
         assert ifp[0].header['TEST2'] == 'testing 2'
@@ -156,7 +156,7 @@ def test_overwrite( fits_file ):
     hdr[ 'TEST1' ] = 'testing 42'
     hdr[ 'TEST2' ] = 'testing 64738'
 
-    savedpath = pathlib.Path( pipeline.utils.save_fits_image_file( str(filepath), data, hdr, overwrite=True ) )
+    savedpath = pathlib.Path( save_fits_image_file( str(filepath), data, hdr, overwrite=True ) )
     assert savedpath == fullpath
     with fits.open( fullpath ) as ifp:
         assert ifp[0].header['TEST1'] == 'testing 42'
@@ -167,46 +167,46 @@ def test_overwrite( fits_file ):
 def test_basic_read( fits_file ):
     filename, fullpath = fits_file
 
-    hdr = pipeline.utils.read_fits_image( fullpath, output='header' )
+    hdr = read_fits_image( fullpath, output='header' )
     assert isinstance( hdr, fits.Header )
     assert hdr['TEST1'] == 'testing 1'
 
-    data = pipeline.utils.read_fits_image( fullpath, output='data' )
+    data = read_fits_image( fullpath, output='data' )
     assert data.dtype == np.float32
     assert ( data == np.zeros( ( 64, 32 ) ) ).all()
 
-    data, hdr = pipeline.utils.read_fits_image( fullpath, output='both' )
+    data, hdr = read_fits_image( fullpath, output='both' )
     assert isinstance( hdr, fits.Header )
     assert hdr['TEST1'] == 'testing 1'
     assert ( data == np.zeros( ( 64, 32 ) ) ).all()
 
 
 def test_read_extension( two_extension_fits_file ):
-    hdr = pipeline.utils.read_fits_image( two_extension_fits_file, ext='image', output='header' )
+    hdr = read_fits_image( two_extension_fits_file, ext='image', output='header' )
     assert isinstance( hdr, fits.Header )
     assert hdr['TEST1'] == 'testing 64'
     assert hdr['TEST2'] == 'testing 128'
 
-    hdr = pipeline.utils.read_fits_image( two_extension_fits_file, ext='weight', output='header' )
+    hdr = read_fits_image( two_extension_fits_file, ext='weight', output='header' )
     assert isinstance( hdr, fits.Header )
     assert hdr['TEST1'] == 'Rosencrantz'
     assert hdr['TEST2'] == 'Guildenstern'
 
-    data = pipeline.utils.read_fits_image( two_extension_fits_file, ext='image', output='data' )
+    data = read_fits_image( two_extension_fits_file, ext='image', output='data' )
     assert data.dtype == np.float32
     assert ( data == np.full( (64, 32), 3.141, dtype=np.float32 ) ).all()
 
-    data = pipeline.utils.read_fits_image( two_extension_fits_file, ext='weight', output='data' )
+    data = read_fits_image( two_extension_fits_file, ext='weight', output='data' )
     assert data.dtype == np.float32
     assert ( data == np.full( (64, 32), 2.718, dtype=np.float32 ) ).all()
 
-    data, hdr = pipeline.utils.read_fits_image( two_extension_fits_file, ext='image', output='both' )
+    data, hdr = read_fits_image( two_extension_fits_file, ext='image', output='both' )
     assert isinstance( hdr, fits.Header )
     assert hdr['TEST1'] == 'testing 64'
     assert hdr['TEST2'] == 'testing 128'
     assert ( data == np.full( (64, 32), 3.141,dtype=np.float32 ) ).all()
 
-    data, hdr = pipeline.utils.read_fits_image( two_extension_fits_file, ext='weight', output='both' )
+    data, hdr = read_fits_image( two_extension_fits_file, ext='weight', output='both' )
     assert isinstance( hdr, fits.Header )
     assert hdr['TEST1'] == 'Rosencrantz'
     assert hdr['TEST2'] == 'Guildenstern'
@@ -222,7 +222,7 @@ def test_just_update_header( fits_file ):
     header['TEST3'] = 'added'
     data = np.full( (64, 32), 1.414, dtype=np.float32 )
 
-    savedpath = pipeline.utils.save_fits_image_file( str(filepath), data, header, just_update_header=True )
+    savedpath = save_fits_image_file( str(filepath), data, header, just_update_header=True )
     assert pathlib.Path( savedpath ) == fullpath
 
     with fits.open( fullpath) as ifp:
