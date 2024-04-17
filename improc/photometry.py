@@ -2,14 +2,14 @@
 import numpy as np
 
 from improc.tools import make_gaussian
-
+from astropy.stats import sigma_clip
 
 # caching the soft-edge circles for faster calculations
 CACHED_CIRCLES = []
 CACHED_RADIUS_RESOLUTION = 0.01
 
 
-def get_circle(radius, imsize=15, oversampling=100):
+def get_circle(radius, imsize=15, oversampling=100, soft=True):
     """Get a soft-edge circle.
 
     This function will return a 2D array with a soft-edge circle of the given radius.
@@ -36,7 +36,7 @@ def get_circle(radius, imsize=15, oversampling=100):
             return circ
 
     # Create the circle
-    circ = Circle(radius, imsize=imsize, oversampling=oversampling)
+    circ = Circle(radius, imsize=imsize, oversampling=oversampling, soft=soft)
 
     # Cache the circle
     CACHED_CIRCLES.append(circ)
@@ -45,10 +45,11 @@ def get_circle(radius, imsize=15, oversampling=100):
 
 
 class Circle:
-    def __init__(self, radius, imsize=15, oversampling=100):
+    def __init__(self, radius, imsize=15, oversampling=100, soft=True):
         self.radius = radius
         self.imsize = imsize
         self.oversampling = oversampling
+        self.soft = soft
 
         # these include the circle, after being moved by sub-pixel shifts for all possible positions in x and y
         self.datacube = np.zeros((oversampling ** 2, imsize, imsize))
@@ -70,9 +71,10 @@ class Circle:
         xgrid = xgrid - self.imsize // 2 - x
         ygrid = ygrid - self.imsize // 2 - y
         r = np.sqrt(xgrid ** 2 + ygrid ** 2)
-        im = 1 + self.radius - r
-        im[r <= self.radius] = 1
-        im[r > self.radius + 1] = 0
+        if soft==True:
+            im = 1 + self.radius - r
+            im[r <= self.radius] = 1
+            im[r > self.radius + 1] = 0
         # TODO: improve this with a better soft-edge function
 
         return im
@@ -253,8 +255,8 @@ def iterative_photometry(
             areas[j] = np.nansum(mask)  # save the number of pixels in the aperture
 
             # get an offset annulus to get a local background estimate
-            inner = get_circle(radius=annulus[0], imsize=nandata.shape[0]).get_image(reposition_cx, reposition_cy)
-            outer = get_circle(radius=annulus[1], imsize=nandata.shape[0]).get_image(reposition_cx, reposition_cy)
+            inner = get_circle(radius=annulus[0], imsize=nandata.shape[0], soft=False).get_image(reposition_cx, reposition_cy)
+            outer = get_circle(radius=annulus[1], imsize=nandata.shape[0], soft=False).get_image(reposition_cx, reposition_cy)
             annulus_map = outer - inner
 
             # background and variance only need to be calculated once (they are the same for all apertures)
@@ -263,6 +265,7 @@ def iterative_photometry(
             if j == 0:  # smallest aperture only
                 # TODO: consider replacing this with a hard-edge annulus and do median or sigma clipping on the pixels
                 background = np.nansum(nandata * annulus_map) / np.nansum(annulus_map)  # b/g per pixel
+                background = sigma_clip(background,sigma=5)
                 variance = np.nansum((nandata - background) * annulus_map) ** 2 / np.nansum(annulus_map)  # per pixel
 
                 normalization = (fluxes[j] - background * areas[j])
