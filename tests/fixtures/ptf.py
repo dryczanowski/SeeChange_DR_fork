@@ -142,8 +142,6 @@ def ptf_exposure(ptf_downloader):
 
 @pytest.fixture
 def ptf_datastore(datastore_factory, ptf_exposure, ptf_ref, ptf_cache_dir, ptf_bad_pixel_map):
-    import pdb; pdb.set_trace()
-    ptf_exposure.instrument_object.fetch_sections()
     ds = datastore_factory(
         ptf_exposure,
         11,

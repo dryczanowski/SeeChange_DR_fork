@@ -23,6 +23,8 @@ def get_circle(radius, imsize=15, oversampling=100, soft=True):
     oversampling: int
         The oversampling factor for the circle.
         Default is 100.
+    soft: bool
+        Toggle the soft edge of the circle. Default is True (soft edge on).
 
     Returns
     -------
@@ -71,10 +73,15 @@ class Circle:
         xgrid = xgrid - self.imsize // 2 - x
         ygrid = ygrid - self.imsize // 2 - y
         r = np.sqrt(xgrid ** 2 + ygrid ** 2)
-        if soft==True:
+        if self.soft==True:
             im = 1 + self.radius - r
             im[r <= self.radius] = 1
             im[r > self.radius + 1] = 0
+        else: 
+            im = r
+            im[r <= self.radius] = 1
+            im[r > self.radius] = 0
+        
         # TODO: improve this with a better soft-edge function
 
         return im
@@ -263,9 +270,7 @@ def iterative_photometry(
             # but moments/centroids can be calculated for each aperture, but we will only want to save one
             # so how about we use the smallest one?
             if j == 0:  # smallest aperture only
-                # TODO: consider replacing this with a hard-edge annulus and do median or sigma clipping on the pixels
-                background = np.nansum(nandata * annulus_map) / np.nansum(annulus_map)  # b/g per pixel
-                background = sigma_clip(background,sigma=5)
+                background = np.nansum(sigma_clip(nandata * annulus_map,sigma=5)) / np.nansum(annulus_map)  # sigma-clipped b/g per pixel
                 variance = np.nansum((nandata - background) * annulus_map) ** 2 / np.nansum(annulus_map)  # per pixel
 
                 normalization = (fluxes[j] - background * areas[j])
