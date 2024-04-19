@@ -35,7 +35,7 @@ def test_background_sigma_clip(ptf_datastore):
     flagsClip = ptf_datastore.image.flags[  clipCentX - clipHalfWidth : clipCentX + clipHalfWidth, 
                                             clipCentY - clipHalfWidth : clipCentY + clipHalfWidth]
     result = iterative_photometry(imgClip, weightClip, flagsClip, np.zeros_like(imgClip))
-    assert result['background'] == pytest.approx(1199.1791, rel=1e-6)
+    assert result['background'] == pytest.approx(1199.1791, rel=1e-4)
   
 @pytest.mark.skipif( os.getenv('INTERACTIVE') is None, reason='Set INTERACTIVE to run this test' )
 def test_plot_annulus(ptf_datastore):

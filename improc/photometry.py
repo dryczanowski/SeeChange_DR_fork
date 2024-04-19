@@ -1,7 +1,7 @@
 
 import numpy as np
 
-from improc.tools import make_gaussian
+from improc.tools import make_gaussian, sigma_clipping
 from astropy.stats import sigma_clip
 
 # caching the soft-edge circles for faster calculations
@@ -34,7 +34,7 @@ def get_circle(radius, imsize=15, oversampling=100, soft=True):
     """
     # Check if the circle is already cached
     for circ in CACHED_CIRCLES:
-        if np.abs(circ.radius - radius) < CACHED_RADIUS_RESOLUTION:
+        if np.abs(circ.radius - radius) < CACHED_RADIUS_RESOLUTION and circ.imsize == imsize and circ.soft == soft:
             return circ
 
     # Create the circle
@@ -272,7 +272,6 @@ def iterative_photometry(
             if j == 0:  # smallest aperture only
                 background = np.nansum(sigma_clip(nandata * annulus_map,sigma=5)) / np.nansum(annulus_map)  # sigma-clipped b/g per pixel
                 variance = np.nansum((nandata - background) * annulus_map) ** 2 / np.nansum(annulus_map)  # per pixel
-
                 normalization = (fluxes[j] - background * areas[j])
                 masked_data_bg = (nandata - background) * mask
 
