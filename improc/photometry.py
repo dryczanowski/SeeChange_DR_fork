@@ -2,7 +2,6 @@
 import numpy as np
 
 from improc.tools import make_gaussian, sigma_clipping
-from astropy.stats import sigma_clip
 
 # caching the soft-edge circles for faster calculations
 CACHED_CIRCLES = []
@@ -270,8 +269,8 @@ def iterative_photometry(
             # but moments/centroids can be calculated for each aperture, but we will only want to save one
             # so how about we use the smallest one?
             if j == 0:  # smallest aperture only
-                background = np.nansum(sigma_clip(nandata * annulus_map,sigma=5)) / np.nansum(annulus_map)  # sigma-clipped b/g per pixel
-                variance = np.nansum((nandata - background) * annulus_map) ** 2 / np.nansum(annulus_map)  # per pixel
+                background, standard_dev = sigma_clipping(ndata * annulus_map, sigma=5)
+                variance = standard_dev ** 2
                 normalization = (fluxes[j] - background * areas[j])
                 masked_data_bg = (nandata - background) * mask
 
