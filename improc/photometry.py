@@ -269,7 +269,7 @@ def iterative_photometry(
             # but moments/centroids can be calculated for each aperture, but we will only want to save one
             # so how about we use the smallest one?
             if j == 0:  # smallest aperture only
-                background, standard_dev = sigma_clipping(ndata * annulus_map, sigma=5)
+                background, standard_dev = sigma_clipping(ndata * annulus_map, nsigma=5.0)
                 variance = standard_dev ** 2
                 normalization = (fluxes[j] - background * areas[j])
                 masked_data_bg = (nandata - background) * mask
