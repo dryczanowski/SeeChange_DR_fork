@@ -264,12 +264,14 @@ def iterative_photometry(
             inner = get_circle(radius=annulus[0], imsize=nandata.shape[0], soft=False).get_image(reposition_cx, reposition_cy)
             outer = get_circle(radius=annulus[1], imsize=nandata.shape[0], soft=False).get_image(reposition_cx, reposition_cy)
             annulus_map = outer - inner
+            annulus_map[annulus_map == 0.] = np.nan # flag pixels outside annulus as nan
 
             # background and variance only need to be calculated once (they are the same for all apertures)
             # but moments/centroids can be calculated for each aperture, but we will only want to save one
             # so how about we use the smallest one?
             if j == 0:  # smallest aperture only
-                background, standard_dev = sigma_clipping(nandata * annulus_map, nsigma=5.0)
+
+                background, standard_dev = sigma_clipping(nandata * annulus_map, nsigma=5.0, median=True)
                 variance = standard_dev ** 2
                 normalization = (fluxes[j] - background * areas[j])
                 masked_data_bg = (nandata - background) * mask
