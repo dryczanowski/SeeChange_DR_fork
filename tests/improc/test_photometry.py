@@ -11,7 +11,7 @@ clipCentY = 1323
 clipHalfWidth = 12 #half-width of clipped image
 
 # uncomment this to run the plotting tests interactively
-os.environ['INTERACTIVE'] = '1'
+# os.environ['INTERACTIVE'] = '1'
 
 #TODO: We should write this once we have a better soft-edge function
 # def test_circle_soft():
