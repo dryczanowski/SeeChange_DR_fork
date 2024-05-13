@@ -17,7 +17,7 @@ from astropy.io import fits
 import astropy.coordinates
 import astropy.units as u
 
-from pipeline.utils import read_fits_image, save_fits_image_file
+from util.util import read_fits_image, save_fits_image_file
 
 from models.base import (
     Base,
@@ -311,7 +311,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
     )
 
     exp_time = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=False,
         index=True,
         doc="Exposure time in seconds. Multi-exposure images will have the total exposure time."
@@ -383,7 +383,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
     )
 
     fwhm_estimate = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         index=True,
         doc=(
@@ -393,7 +393,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
     )
 
     zero_point_estimate = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         index=True,
         doc=(
@@ -403,7 +403,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
     )
 
     lim_mag_estimate = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         index=True,
         doc=(
@@ -413,7 +413,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
     )
 
     bkg_mean_estimate = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         index=True,
         doc=(
@@ -423,12 +423,13 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
     )
 
     bkg_rms_estimate = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         index=True,
         doc=(
-            'Background RMS estimate for the image, '
-            'from the first time the image was processed.'
+            'Background RMS residual (i.e. sky noise ) '
+            'estimate for the image, from the first time '
+            'the image was processed.'
         )
     )
 
@@ -526,7 +527,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
             self.load_upstream_products(this_object_session)
 
     def merge_all(self, session):
-        """Use safe_merge to merge all the downstream products and assign them back to self.
+        """Merge self and all its downstream products and assign them back to self.
 
         This includes: sources, psf, wcs, zp.
         This will also merge relationships, such as exposure or upstream_images,
@@ -538,16 +539,42 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
         """
         new_image = self.safe_merge(session=session)
         session.flush()  # make sure new_image gets an ID
+
         if self.sources is not None:
             self.sources.image = new_image
             self.sources.image_id = new_image.id
             self.sources.provenance_id = self.sources.provenance.id if self.sources.provenance is not None else None
             new_image.sources = self.sources.merge_all(session=session)
+
             new_image.wcs = new_image.sources.wcs
+            if new_image.wcs is not None:
+                new_image.wcs.sources = new_image.sources
+                new_image.wcs.sources_id = new_image.sources.id
+                new_image.wcs.provenance_id = new_image.wcs.provenance.id if new_image.wcs.provenance is not None else None
+
             new_image.zp = new_image.sources.zp
+            if new_image.zp is not None:
+                new_image.zp.sources = new_image.sources
+                new_image.zp.sources_id = new_image.sources.id
+                new_image.zp.provenance_id = new_image.zp.provenance.id if new_image.zp.provenance is not None else None
+
             new_image.cutouts = new_image.sources.cutouts
             new_image.measurements = new_image.sources.measurements
             new_image._aligned_images = self._aligned_images
+
+            # if self.wcs is not None:
+            #     self.wcs.sources = new_image.sources
+            #     self.wcs.sources_id = new_image.sources.id
+            #     self.wcs.provenance_id = self.wcs.provenance.id if self.wcs.provenance is not None else None
+            #     # new_image.wcs = self.wcs.safe_merge(session=session)
+            #     new_image.wcs = session.merge(self.wcs)
+            #
+            # if self.zp is not None:
+            #     self.zp.sources = new_image.sources
+            #     self.zp.sources_id = new_image.sources.id
+            #     self.zp.provenance_id = self.zp.provenance.id if self.zp.provenance is not None else None
+            #     # new_image.zp = self.zp.safe_merge(session=session)
+            #     new_image.zp = session.merge(self.zp)
 
         if self.psf is not None:
             self.psf.image = new_image
@@ -558,6 +585,22 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
                 new_image.psf._bitflag = 0
             if new_image.psf._upstream_bitflag is None:  # I don't know why this isn't set to 0 using the default
                 new_image.psf._upstream_bitflag = 0
+
+        # take care of the upstream images and their products
+        # if sa.inspect(self).detached:  # self can't load the images, but new_image has them
+        #     upstream_list = new_image.upstream_images
+        # else:
+        #     upstream_list = self.upstream_images  # can use the original images, before merging into new_image
+        try:
+            upstream_list = self.upstream_images  # can use the original images, before merging into new_image
+        except DetachedInstanceError as e:
+            if "lazy load operation of attribute 'upstream_images' cannot proceed" in str(e):
+                upstream_list = []  # can't access the upstream images, so just we have no use calling merge_all
+            else:  # other errors should be treated normally
+                raise e
+
+        for i, im in enumerate(upstream_list):
+            new_image.upstream_images[i] = im.merge_all(session)
 
         return new_image
 
@@ -1026,7 +1069,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
         for i, image in enumerate(self.upstream_images):
             new_image = self._aligner.run(image, alignment_target)
             aligned.append(new_image)
-            ImageAligner.temp_images.append(new_image)  # keep track of all these images for cleanup purposes
+            # ImageAligner.temp_images.append(new_image)  # keep track of all these images for cleanup purposes
 
         self._aligned_images = aligned
 
@@ -1435,6 +1478,67 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
                 if not ( gotim and gotweight and gotflags ):
                     raise FileNotFoundError( "Failed to load at least one of image, weight, flags" )
+
+
+    def free( self, free_derived_products=True, free_aligned=True, only_free=None ):
+        """Free loaded image memory.  Does not delete anything from disk.
+
+        Will wipe out any loaded image, weight, flags, background,
+        score, psfflux, psffluxerr, nandata, and nanscore data, for
+        purposes of saving memory.  Doesn't make sure anything is saved
+        to disk, so only use this when you know you can use it.
+
+        (This is accomplished by setting the parameters of self that
+        store that data to None, and otherwise depends on the python
+        garbage collector.  If there are other references to the data
+        pointed to by those parameters, the memory of course won't
+        actually be freed.)
+
+        Parameters
+        ----------
+          free_derived_products: bool, default True
+             If True, will also call free on self.sources, self.psf, and
+             self.wcs
+
+          free_aligned: bool, default True
+             Will call free() on each of the aligned images referenced
+             by this image (if any).
+
+          only_free: set or list of strings
+             If you pass this string, it will not free everything, but
+             only the things you specify here.  Members of the string
+             can include raw_data, data, weight, flags, background, score,
+             psfflux, psffluxerr, nandata, and nanscore.
+
+        """
+        allfree = set( Image.saved_extensions )
+        allfree.add( "raw_data" )
+        tofree = set( only_free ) if only_free is not None else allfree
+
+        for prop in tofree:
+            if prop not in allfree:
+                raise RuntimeError( f"Unknown image property to free: {prop}" )
+            if prop == 'raw_data':
+                self.raw_data = None
+            else:
+                setattr( self, f'_{prop}', None )
+
+        if free_derived_products:
+            if self.sources is not None:
+                self.sources.free()
+            if self.psf is not None:
+                self.psf.free()
+            # This implementation in WCS should be done after PR167 is done.
+            # Not a big deal if it's not done, because WCSes will not use
+            # very much memory
+            # if self.wcs is not None:
+            #     self.wcs.free()
+        if free_aligned:
+            if self._aligned_images is not None:
+                for alim in self._aligned_images:
+                    alim.free( free_derived_products=free_derived_products, only_free=only_free )
+
+
 
     def get_upstream_provenances(self):
         """Collect the provenances for all upstream objects.

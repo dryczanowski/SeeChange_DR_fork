@@ -13,12 +13,12 @@ import sqlalchemy as sa
 import astropy.time
 from astropy.io import fits
 import astropy.units as u
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, Distance
 
 from models.base import Base, SmartSession, AutoIDMixin,_logger
 
 from pipeline.catalog_tools import Bandpass
-from pipeline.utils import parse_dateobs, read_fits_image
+from util.util import parse_dateobs, read_fits_image
 
 
 # dictionary of regex for filenames, pointing at instrument names
@@ -231,31 +231,31 @@ class SensorSection(Base, AutoIDMixin):
     #  general low-precision instrument comparison.
 
     read_noise = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         doc='Read noise of the sensor section (in electrons). '
     )
 
     dark_current = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         doc='Dark current of the sensor section (in electrons/pixel/second). '
     )
 
     gain = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         doc='Gain of the sensor section (in electrons/ADU). '
     )
 
     saturation_limit = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         doc='Saturation level of the sensor section (in electrons). '
     )
 
     non_linearity_limit = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=True,
         doc='Non-linearity of the sensor section (in electrons). '
     )
@@ -738,7 +738,7 @@ class Instrument:
     def load_section_image(self, filepath, section_id):
         """
         Load one section of an exposure file.
-        The default loader uses the pipeline.utils.read_fits_image function,
+        The default loader uses the util.util.read_fits_image function,
         which is a basic FITS reader utility. More advanced instruments should
         override this function to use more complex file reading code.
 
@@ -778,7 +778,7 @@ class Instrument:
         Load the header from file.
 
         By default, instruments use a "standard" FITS header that is read
-        out using pipeline.utils.read_fits_image.
+        out using util.util.read_fits_image.
         Subclasses can override this method to use a different header format.
         Note that all keyword translations and value conversions happen later,
         in the extract_header_info function.
@@ -1268,6 +1268,7 @@ class Instrument:
             ra=catdata['X_WORLD'] * u.deg,
             dec=catdata['Y_WORLD'] * u.deg,
             # distance=Distance(parallax=wd_cat['parallax'][i] * u.mas) if wd_cat['parallax'][i] > 0 else None,
+            distance=Distance(1 * u.kpc),  # the distance is not really relevant for on-sky motion
             pm_ra_cosdec=catdata['PMRA'] * u.mas / u.yr,
             pm_dec=catdata['PMDEC'] * u.mas / u.yr,
             obstime=astropy.time.Time('2016.0', format='jyear', scale='tdb'),
@@ -1563,7 +1564,7 @@ class Instrument:
 
         """
 
-        arrparse = re.compile( '^\s*\[\s*(?P<x0>\d+)\s*:\s*(?P<x1>\d+)\s*,\s*(?P<y0>\d+)\s*:\s*(?P<y1>\d+)\s*\]\s*$' )
+        arrparse = re.compile( r'^\s*\[\s*(?P<x0>\d+)\s*:\s*(?P<x1>\d+)\s*,\s*(?P<y0>\d+)\s*:\s*(?P<y1>\d+)\s*\]\s*$' )
         retval = []
         for letter in [ 'A', 'B' ]:
             if ( f'BIASSEC{letter}' not in header ) or ( f'DATASEC{letter}' not in header ):
@@ -1833,6 +1834,8 @@ class Instrument:
 
 
 class DemoInstrument(Instrument):
+    fake_image_size_x = 512
+    fake_image_size_y = 1024
 
     def __init__(self, **kwargs):
         self.name = 'DemoInstrument'
@@ -1883,7 +1886,7 @@ class DemoInstrument(Instrument):
         section: SensorSection
             A new section for this instrument.
         """
-        return SensorSection(identifier, self.name, size_x=512, size_y=1024)
+        return SensorSection(identifier, self.name, size_x=self.fake_image_size_x, size_y=self.fake_image_size_y)
 
     def load_section_image(self, filepath, section_id):
         """

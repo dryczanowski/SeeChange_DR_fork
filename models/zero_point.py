@@ -4,10 +4,12 @@ import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.schema import UniqueConstraint
+from sqlalchemy.dialects.postgresql import ARRAY
 
-from models.base import Base, AutoIDMixin, HasBitFlagBadness
+from models.base import Base, SmartSession, AutoIDMixin, HasBitFlagBadness
 from models.enums_and_bitflags import catalog_match_badness_inverse
-
+from models.world_coordinates import WorldCoordinates
+from models.source_list import SourceList
 
 class ZeroPoint(Base, AutoIDMixin, HasBitFlagBadness):
     __tablename__ = 'zero_points'
@@ -56,21 +58,21 @@ class ZeroPoint(Base, AutoIDMixin, HasBitFlagBadness):
     )
 
     zp = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=False,
         index=False,
         doc="Zeropoint: -2.5*log10(adu_psf) + zp = mag"
     )
 
     dzp = sa.Column(
-        sa.Float,
+        sa.REAL,
         nullable=False,
         index=False,
         doc="Uncertainty on zp"
     )
 
     aper_cor_radii = sa.Column(
-        sa.ARRAY( sa.REAL ),
+        ARRAY( sa.REAL, zero_indexes=True ),
         nullable=True,
         default=None,
         index=False,
@@ -78,7 +80,7 @@ class ZeroPoint(Base, AutoIDMixin, HasBitFlagBadness):
     )
 
     aper_cors = sa.Column(
-        sa.ARRAY( sa.REAL ),
+        ARRAY( sa.REAL, zero_indexes=True ),
         nullable=True,
         default=None,
         index=False,
@@ -120,3 +122,32 @@ class ZeroPoint(Base, AutoIDMixin, HasBitFlagBadness):
                 return apcor
 
         raise ValueError( f"No aperture correction tabulated for aperture radius within 0.01 pixels of {rad}" )
+
+    def get_upstreams(self, session=None):
+        """Get the extraction SourceList and WorldCoordinates used to make this ZeroPoint"""
+        from models.provenance import Provenance
+        with SmartSession(session) as session:
+            source_list = session.scalars(sa.select(SourceList).where(SourceList.id == self.sources_id)).all()
+
+            wcs_prov_id = None
+            for prov in self.provenance.upstreams:
+                if prov.process == "astro_cal":
+                    wcs_prov_id = prov.id
+            wcs = []
+            if wcs_prov_id is not None:
+                wcs = session.scalars(sa.select(WorldCoordinates) 
+                                    .where(WorldCoordinates.provenance 
+                                            .has(Provenance.id == wcs_prov_id))).all()
+
+        return source_list + wcs
+    
+    def get_downstreams(self, session=None):
+        """Get the downstreams of this ZeroPoint"""
+        from models.image import Image
+        from models.provenance import Provenance
+        with SmartSession(session) as session:
+            subs = session.scalars(sa.select(Image)
+                                    .where(Image.provenance
+                                            .has(Provenance.upstreams
+                                                .any(Provenance.id == self.provenance.id)))).all()
+        return subs

@@ -3,11 +3,14 @@ import os
 import numpy as np
 import pandas as pd
 
+from collections import defaultdict
+
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.schema import UniqueConstraint
+from sqlalchemy.dialects.postgresql import ARRAY
 
 import astropy.table
 
@@ -69,7 +72,7 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     )
 
     image = orm.relationship(
-        'Image',
+        Image,
         lazy='selectin',
         cascade='save-update, merge, refresh-expire, expunge',
         passive_deletes=True,
@@ -80,7 +83,7 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     is_coadd = association_proxy('image', 'is_coadd')
 
     aper_rads = sa.Column(
-        sa.ARRAY( sa.REAL ),
+        ARRAY( sa.REAL, zero_indexes=True ),
         nullable=True,
         default=None,
         index=False,
@@ -203,7 +206,7 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                 new_list = []
                 for item in sub_obj:
                     item.sources = new_sources  # make sure to first point this relationship back to new_sources
-                    new_list.append(item.safe_merge(session=session))
+                    new_list.append(session.merge(item))
                 setattr(new_sources, att, new_list)
 
         return new_sources
@@ -631,6 +634,19 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         self.num_sources = len( self.data )
         super().save(fullname, **kwargs)
 
+
+    def free( self, ):
+        """Free loaded source list memory.
+
+        Wipe out the data and info fields, freeing memory.  Depends on
+        python garbage collection, so if there are other references to
+        those objects, the memory won't actually be freed.
+
+        """
+        self._data = None
+        self._info = None
+
+
     @staticmethod
     def _convert_from_sextractor_to_numpy( arr, copy=False ):
         """Convert from 1-offset to 0-offset coordinates.
@@ -663,18 +679,25 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         Parmaeters
         ----------
-          arr: numpy array with named records
+          arr: numpy array with named records, or astropy.table.Table
 
         Returns
         -------
-          numpy array with named records; will be a copy, arr is not touched
+          A copy of arr, with pixel positions incremented by 1
         """
-        arr = np.copy( arr, subok=True )
-        for col in arr.dtype.names:
-            if col in [ 'XMIN_IMAGE', 'XMAX_IMAGE', 'YMIN_IMAGE', 'YMAX_IMAGE',
-                        'X_IMAGE', 'Y_IMAGE', 'XPEAK_IMAGE', 'YPEAK_IMAGE',
-                        'XWIN_IMAGE', 'YWIN_IMAGE' ]:
-                arr[col] +=1
+        cols = { 'XMIN_IMAGE', 'XMAX_IMAGE', 'YMIN_IMAGE', 'YMAX_IMAGE',
+                 'X_IMAGE', 'Y_IMAGE', 'XPEAK_IMAGE', 'YPEAK_IMAGE',
+                 'XWIN_IMAGE', 'YWIN_IMAGE' }
+        if isinstance( arr, np.ndarray ):
+            cols = cols.intersection( set(arr.dtype.names) )
+            arr = np.copy( arr, subok=True )
+        elif isinstance( arr, astropy.table.Table ):
+            cols = cols.intersection( set(arr.columns) )
+            arr = astropy.table.Table( arr )
+
+        for col in cols:
+            arr[col] +=1
+
         return arr
 
     def ds9_regfile( self, regfile, color='green', radius=2, width=2, whichsources='all', clobber=True ):
@@ -731,13 +754,21 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         """Get all the data products (WCSs and ZPs) that are made using this source list. """
         from models.world_coordinates import WorldCoordinates
         from models.zero_point import ZeroPoint
+        from models.cutouts import Cutouts
+        from models.psf import PSF
+        from models.provenance import Provenance
 
-        # TODO: add Cutouts and Measurements?
         with SmartSession(session) as session:
             wcs = session.scalars(sa.select(WorldCoordinates).where(WorldCoordinates.sources_id == self.id)).all()
             zps = session.scalars(sa.select(ZeroPoint).where(ZeroPoint.sources_id == self.id)).all()
+            cutouts = session.scalars(sa.select(Cutouts).where(Cutouts.sources_id == self.id)).all()
+            subs = session.scalars(sa.select(Image)
+                                   .where(Image.provenance
+                                          .has(Provenance.upstreams
+                                               .any(Provenance.id == self.provenance.id)))).all()
+             
+        return wcs + zps + cutouts + subs
 
-        return wcs + zps
 
     def show(self, **kwargs):
         """Show the source positions on top of the image.

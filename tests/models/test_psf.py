@@ -1,6 +1,8 @@
 import pytest
 import io
 import os
+import psutil
+import gc
 import uuid
 import random
 import math
@@ -144,7 +146,7 @@ class PSFPaletteMaker:
                     '-BACK_VALUE', '0.0',
                     self.imagename
                    ]
-        res = subprocess.run( command, capture_output=True )
+        res = subprocess.run( command, capture_output=True, timeout=60 )
         assert res.returncode == 0
 
         _logger.info( "Runing psfex..." )
@@ -161,7 +163,7 @@ class PSFPaletteMaker:
                     '-XML_URL', 'file:///usr/share/psfex/psfex.xsl',
                     self.catname
                    ]
-        res = subprocess.run( command, capture_output=True )
+        res = subprocess.run( command, capture_output=True, timeout=60 )
         assert res.returncode == 0
 
         self.psf = PSF( format='psfex' )
@@ -287,7 +289,7 @@ def test_write_psfex_psf( ztf_filepaths_image_sources_psf ):
                     '-BACK_FILTERSIZE', '3',
                     '-PSF_NAME', psffullpath,
                     image ]
-        res = subprocess.run( command, capture_output=True )
+        res = subprocess.run( command, capture_output=True, timeout=60 )
         assert res.returncode == 0
 
     finally:
@@ -338,6 +340,49 @@ def test_save_psf( ztf_datastore_uncommitted, provenance_base, provenance_extra 
                 psf2.delete_from_disk_and_database(session=session)
             if 'im' in locals():
                 im.delete_from_disk_and_database(session=session)
+
+
+@pytest.mark.flaky(max_runs=3)
+def test_free( decam_datastore ):
+    ds = decam_datastore
+    ds.get_psf()
+    proc = psutil.Process()
+
+    # Make sure memory is loaded
+    _ = ds.image.data
+    _ = ds.psf.data
+    _ = None
+
+    assert ds.image._data is not None
+    assert ds.psf._data is not None
+    assert ds.psf._info is not None
+    assert ds.psf._header is not None
+
+    origmem = proc.memory_info()
+    ds.psf.free()
+    assert ds.psf._data is None
+    assert ds.psf._info is None
+    assert ds.psf._header is None
+    freemem = proc.memory_info()
+
+    # psf._data.nbytes was 15k, so it's going to be in the noise of free
+    #  memory.  (High-school me with his commodore 64 is facepalming at
+    #  that statement.)  Empirically, origmem.rss and freemem.rss are
+    #  the same right now.
+
+    _ = ds.psf.data
+    assert ds.psf._data is not None
+    assert ds.psf._info is not None
+    assert ds.psf._header is not None
+
+    origmem = proc.memory_info()
+    ds.image.free( free_derived_products=True )
+    assert ds.psf._data is None
+    assert ds.psf._info is None
+    assert ds.psf._header is None
+    freemem = proc.memory_info()
+
+    assert origmem.rss - freemem.rss > 60 * 1024 * 1024
 
 
 @pytest.mark.skipif( os.getenv('RUN_SLOW_TESTS') is None, reason="Set RUN_SLOW_TESTS to run this test" )

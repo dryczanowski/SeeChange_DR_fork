@@ -1,6 +1,8 @@
 import os
 import pytest
 import re
+import psutil
+import gc
 import hashlib
 import pathlib
 import uuid
@@ -661,8 +663,8 @@ def test_multiple_images_badness(
             sim_image4.provenance = provenance_extra
             sim_image4.provenance.upstreams = sim_image4.get_upstream_provenances()
             cleanups.append(ImageCleanup.save_image(sim_image4))
-            images.append(sim_image4)
             sim_image4 = session.merge(sim_image4)
+            images.append(sim_image4)
             session.commit()
 
             assert sim_image4.id is not None
@@ -691,8 +693,8 @@ def test_multiple_images_badness(
             sim_image7 = Image.from_ref_and_new(sim_image6, sim_image5)
             sim_image7.provenance = provenance_extra
             cleanups.append(ImageCleanup.save_image(sim_image7))
-            images.append(sim_image7)
             sim_image7 = session.merge(sim_image7)
+            images.append(sim_image7)
             session.commit()
 
             # check that the new subtraction is not flagged
@@ -1077,38 +1079,40 @@ def test_image_from_exposure_filter_array(sim_exposure_filter_array):
 
 
 def test_image_with_multiple_upstreams(sim_exposure1, sim_exposure2, provenance_base):
-    sim_exposure1.update_instrument()
-    sim_exposure2.update_instrument()
-
-    # make sure exposures are in chronological order...
-    if sim_exposure1.mjd > sim_exposure2.mjd:
-        sim_exposure1, sim_exposure2 = sim_exposure2, sim_exposure1
-
-    # get a couple of images from exposure objects
-    im1 = Image.from_exposure(sim_exposure1, section_id=0)
-    im2 = Image.from_exposure(sim_exposure2, section_id=0)
-    im2.filter = im1.filter
-    im2.target = im1.target
-
-    im1.provenance = provenance_base
-    _1 = ImageCleanup.save_image(im1)
-
-    im2.provenance = provenance_base
-    _2 = ImageCleanup.save_image(im2)
-
-    # make a coadd image from the two
-    im = Image.from_images([im1, im2])
-    im.provenance = provenance_base
-    _3 = ImageCleanup.save_image(im)
 
     try:
-        im_id = None
-        im1_id = None
-        im2_id = None
         with SmartSession() as session:
+            sim_exposure1.update_instrument()
+            sim_exposure2.update_instrument()
+
+            # make sure exposures are in chronological order...
+            if sim_exposure1.mjd > sim_exposure2.mjd:
+                sim_exposure1, sim_exposure2 = sim_exposure2, sim_exposure1
+
+            # get a couple of images from exposure objects
+            im1 = Image.from_exposure(sim_exposure1, section_id=0)
+            im1.weight = np.ones_like(im1.raw_data)
+            im1.flags = np.zeros_like(im1.raw_data)
+            im2 = Image.from_exposure(sim_exposure2, section_id=0)
+            im2.weight = np.ones_like(im2.raw_data)
+            im2.flags = np.zeros_like(im2.raw_data)
+            im2.filter = im1.filter
+            im2.target = im1.target
+
+            im1.provenance = provenance_base
+            _1 = ImageCleanup.save_image(im1)
+            im1 = im1.merge_all(session)
+
+            im2.provenance = provenance_base
+            _2 = ImageCleanup.save_image(im2)
+            im2 = im2.merge_all(session)
+
+            # make a coadd image from the two
+            im = Image.from_images([im1, im2])
+            im.provenance = provenance_base
+            _3 = ImageCleanup.save_image(im)
             im = im.merge_all( session )
-            im1 = im1.merge_all( session )
-            im2 = im2.merge_all( session )
+
             sim_exposure1 = session.merge(sim_exposure1)
             sim_exposure2 = session.merge(sim_exposure2)
 
@@ -1142,34 +1146,38 @@ def test_image_with_multiple_upstreams(sim_exposure1, sim_exposure2, provenance_
 
 
 def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base):
-    sim_exposure1.update_instrument()
-    sim_exposure2.update_instrument()
-
-    # make sure exposures are in chronological order...
-    if sim_exposure1.mjd > sim_exposure2.mjd:
-        sim_exposure1, sim_exposure2 = sim_exposure2, sim_exposure1
-
-    # get a couple of images from exposure objects
-    im1 = Image.from_exposure(sim_exposure1, section_id=0)
-    im2 = Image.from_exposure(sim_exposure2, section_id=0)
-    im2.filter = im1.filter
-    im2.target = im1.target
-
-    im1.provenance = provenance_base
-    _1 = ImageCleanup.save_image(im1)
-    im2.provenance = provenance_base
-    _2 = ImageCleanup.save_image(im2)
-
-    # make a coadd image from the two
-    im = Image.from_ref_and_new(im1, im2)
-    im.provenance = provenance_base
-    _3 = ImageCleanup.save_image(im)
-
     try:
-        im_id = None
-        im1_id = None
-        im2_id = None
         with SmartSession() as session:
+            sim_exposure1.update_instrument()
+            sim_exposure2.update_instrument()
+
+            # make sure exposures are in chronological order...
+            if sim_exposure1.mjd > sim_exposure2.mjd:
+                sim_exposure1, sim_exposure2 = sim_exposure2, sim_exposure1
+
+            # get a couple of images from exposure objects
+            im1 = Image.from_exposure(sim_exposure1, section_id=0)
+            im1.weight = np.ones_like(im1.raw_data)
+            im1.flags = np.zeros_like(im1.raw_data)
+            im2 = Image.from_exposure(sim_exposure2, section_id=0)
+            im2.weight = np.ones_like(im2.raw_data)
+            im2.flags = np.zeros_like(im2.raw_data)
+            im2.filter = im1.filter
+            im2.target = im1.target
+
+            im1.provenance = provenance_base
+            _1 = ImageCleanup.save_image(im1)
+            im1 = im1.merge_all(session)
+
+            im2.provenance = provenance_base
+            _2 = ImageCleanup.save_image(im2)
+            im2 = im2.merge_all(session)
+
+            # make a coadd image from the two
+            im = Image.from_ref_and_new(im1, im2)
+            im.provenance = provenance_base
+            _3 = ImageCleanup.save_image(im)
+
             im = im.merge_all( session )
             im1 = im1.merge_all( session )
             im2 = im2.merge_all( session )
@@ -1367,7 +1375,7 @@ def test_image_products_are_deleted(ptf_datastore, data_dir, archive):
             archive_files.append(archive_file)
 
     # delete the image and all its downstreams
-    im.delete_from_disk_and_database(remove_folders=True, remove_downstream_data=True)
+    im.delete_from_disk_and_database(remove_folders=True, remove_downstreams=True)
 
     # make sure the files are gone
     for file in local_files:
@@ -1375,3 +1383,75 @@ def test_image_products_are_deleted(ptf_datastore, data_dir, archive):
 
     for file in archive_files:
         assert not os.path.isfile(file)
+
+
+@pytest.mark.flaky(max_runs=3)
+def test_free( decam_exposure, decam_raw_image, ptf_ref ):
+    proc = psutil.Process()
+    origmem = proc.memory_info()
+
+    # Make sure that only_free behaves as expected
+    decam_raw_image._weight = 'placeholder'
+    decam_raw_image.free( only_free={'weight'} )
+    assert decam_raw_image._weight is None
+    assert decam_raw_image._data is not None
+    assert decam_raw_image.raw_data is not None
+
+    with pytest.raises( RuntimeError, match="Unknown image property to free" ):
+        decam_raw_image.free( only_free={'this_is_not_a_property_that_actually_exists'} )
+
+    # Make sure that things are None and that we get the memory back
+    # when we free
+
+    decam_raw_image.free( )
+    assert decam_raw_image._data is None
+    # The image is ~4k by 2k, data is 32-bit
+    # so expect to free ~( 4000*2000 ) *4 >~ 30MiB of data
+    gc.collect()
+    freemem = proc.memory_info()
+    assert origmem.rss - freemem.rss > 30 * 1024 * 1024
+
+    # Make sure that if we clear the exposure's caches, the raw_data is now gone too
+    # decam_exposure has session scope, but that file is on disk so it can reload
+    # as necessary):
+
+    assert decam_raw_image.raw_data is None
+    decam_exposure.data.clear_cache()
+    decam_exposure.section_headers.clear_cache()
+    gc.collect()
+    freemem = proc.memory_info()
+    assert origmem.rss - freemem.rss > 45 * 1024 * 1024
+
+    # Note that decam_raw_image.data will now raise an exception,
+    #  because the weight and flags files aren't yet written to disk for
+    #  this fixture.  (It was constructed in the fixture by manually
+    #  setting data to a float32 copy of raw_data.)  decam_raw_image
+    #  has test scope, not session scope, so that should be OK.
+
+
+    # This next test is only meaningful if the ptf_ref fixture had to
+    # rebuild the coadded ref.  If it loaded it from cache, then the
+    # data for ptf_ref.image.aligned_images will not have been loaded.
+    # So, make sure that happened before even bothering with the test.
+    # (Our github actions tests always start with a clean environment,
+    # so it will get run there.  If you want to run it locally, you
+    # have to make sure your test cache is cleaned out.)
+
+    # NOTE: at some point in the future, we may have coadd do
+    # the freeing of the aligned images, at which point this
+    # test will fail.  This note is here for you to find if
+    # you're the one who made coadd do the freeing....
+
+    if ptf_ref.image.aligned_images[0]._data is not None:
+        origmem = proc.memory_info()
+        # Make sure that the ref image data has been loaded
+        _ = ptf_ref.image.data
+        # Free the image and all the refs.  Expected savings: 6 4k × 2k
+        # 32-bit images =~ 6 * (4000*2000) * 4 >~ 180MiB.
+        ptf_ref.image.free( free_aligned=True )
+        gc.collect()
+        freemem = proc.memory_info()
+        assert origmem.rss - freemem.rss > 180 * 1024 * 1024
+
+    # the free_derived_products parameter is tested in test_source_list.py
+    # and test_psf.py

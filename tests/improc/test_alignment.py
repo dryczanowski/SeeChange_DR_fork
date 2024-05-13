@@ -1,4 +1,6 @@
 import logging
+import warnings
+
 import pytest
 import random
 import re
@@ -12,6 +14,7 @@ from models.base import SmartSession, _logger
 from models.provenance import Provenance
 from models.image import Image
 
+from models.enums_and_bitflags import string_to_bitflag, flag_image_bits_inverse
 from improc.alignment import ImageAligner
 
 
@@ -25,6 +28,10 @@ def test_warp_decam( decam_datastore, decam_reference ):
         warped.filepath = f'warp_test_{"".join(random.choices("abcdefghijklmnopqrstuvwxyz",k=10))}'
 
         assert warped.data.shape == ds.image.data.shape
+
+        oob_bitflag = string_to_bitflag( 'out of bounds', flag_image_bits_inverse)
+        badpixel_bitflag = string_to_bitflag( 'bad pixel', flag_image_bits_inverse)
+        assert (warped.flags == oob_bitflag).sum() > (warped.flags == badpixel_bitflag).sum()
 
         # Check a couple of spots on the image
         # First, around a star:
@@ -116,8 +123,7 @@ def test_alignment_in_image( ptf_reference_images, code_version ):
         ImageAligner.cleanup_temp_images()
         for im in new_image.aligned_images:
             im.delete_from_disk_and_database()
-        new_image.delete_from_disk_and_database(remove_downstream_data=True)
-
+        new_image.delete_from_disk_and_database(remove_downstreams=True)
 
 
 def check_aligned(image1, image2):
@@ -125,12 +131,13 @@ def check_aligned(image1, image2):
     d1[image1.flags > 0] = np.nan
     d2 = image2.data.copy()
     d2[image2.flags > 0] = np.nan
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=r'.*All-NaN slice encountered.*')
+        row_func1 = np.nansum(d1 - np.nanmedian(d1, axis=1, keepdims=True), axis=1)
+        row_func2 = np.nansum(d2 - np.nanmedian(d2, axis=1, keepdims=True), axis=1)
 
-    row_func1 = np.nansum(d1 - np.nanmedian(d1, axis=1, keepdims=True), axis=1)
-    row_func2 = np.nansum(d2 - np.nanmedian(d2, axis=1, keepdims=True), axis=1)
-
-    col_func1 = np.nansum(d1 - np.nanmedian(d1, axis=0, keepdims=True), axis=0)
-    col_func2 = np.nansum(d2 - np.nanmedian(d2, axis=0, keepdims=True), axis=0)
+        col_func1 = np.nansum(d1 - np.nanmedian(d1, axis=0, keepdims=True), axis=0)
+        col_func2 = np.nansum(d2 - np.nanmedian(d2, axis=0, keepdims=True), axis=0)
 
     xcorr_rows = np.correlate(row_func1, row_func2, mode='full')
     xcorr_cols = np.correlate(col_func1, col_func2, mode='full')
