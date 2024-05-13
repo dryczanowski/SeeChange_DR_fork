@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 import matplotlib.pyplot as plt
 
-from improc.photometry import iterative_photometry, get_circle, Circle
+from improc.photometry import iterative_cutouts_photometry, get_circle, Circle
 
 #coordinates nearby a star (pix), such that it appears within the annulus
 clipCentX = 2391
