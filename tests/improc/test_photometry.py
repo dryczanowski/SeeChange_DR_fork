@@ -34,7 +34,7 @@ def test_background_sigma_clip(ptf_datastore):
                                             clipCentY - clipHalfWidth : clipCentY + clipHalfWidth]
     flagsClip = ptf_datastore.image.flags[  clipCentX - clipHalfWidth : clipCentX + clipHalfWidth, 
                                             clipCentY - clipHalfWidth : clipCentY + clipHalfWidth]
-    result = iterative_photometry(imgClip, weightClip, flagsClip, np.zeros_like(imgClip))
+    result = iterative_cutouts_photometry(imgClip, weightClip, flagsClip, np.zeros_like(imgClip))
     assert result['background'] == pytest.approx(1199.1791, rel=1e-2)
   
 @pytest.mark.skipif( os.getenv('INTERACTIVE') is None, reason='Set INTERACTIVE to run this test' )
