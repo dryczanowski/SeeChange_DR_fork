@@ -2,13 +2,7 @@ import pytest
 import pathlib
 import random
 
-import numpy as np
-
-from astropy.io import fits
-
-from models.base import FileOnDiskMixin
-
-from util.util import listify, ensure_file_does_not_exist, read_fits_image, save_fits_image_file
+from util.util import listify, ensure_file_does_not_exist
 
 # TODO : tests other than fits file reading/saving
 
