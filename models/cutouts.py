@@ -20,7 +20,7 @@ from models.base import (
     SpatiallyIndexed,
     HasBitFlagBadness,
 )
-from models.enums_and_bitflags import CutoutsFormatConverter
+from models.enums_and_bitflags import CutoutsFormatConverter, cutouts_badness_inverse
 from models.source_list import SourceList
 
 
@@ -40,7 +40,7 @@ class Cutouts(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBa
         nullable=False,
         default=CutoutsFormatConverter.convert('hdf5'),
         doc="Format of the file on disk. Should be fits, hdf5, csv or npy. "
-            "Saved as integer but is converter to string when loaded. "
+            "Saved as integer but is converted to string when loaded. "
     )
 
     @hybrid_property
@@ -120,28 +120,29 @@ class Cutouts(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBa
         return self.sub_image.new_aligned_image
 
     @property
-    def new_image(self):
-        """Get the aligned new image using the sub_image. """
-        return self.sub_image.new_aligned_image
-
-    @property
     def ref_image(self):
         """Get the aligned reference image using the sub_image. """
         return self.sub_image.ref_aligned_image
 
     def __init__(self, *args, **kwargs):
         FileOnDiskMixin.__init__(self, *args, **kwargs)
+        HasBitFlagBadness.__init__(self)
         SeeChangeBase.__init__(self)  # don't pass kwargs as they could contain non-column key-values
 
         self.format = 'hdf5'  # the default should match the column-defined default above!
 
         self._source_row = None
+
         self._sub_data = None
         self._sub_weight = None
         self._sub_flags = None
+        self._sub_psfflux = None
+        self._sub_psffluxerr = None
+
         self._ref_data = None
         self._ref_weight = None
         self._ref_flags = None
+
         self._new_data = None
         self._new_weight = None
         self._new_flags = None
@@ -157,13 +158,19 @@ class Cutouts(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBa
     def init_on_load(self):
         Base.init_on_load(self)
         FileOnDiskMixin.init_on_load(self)
+
         self._source_row = None
+
         self._sub_data = None
         self._sub_weight = None
         self._sub_flags = None
+        self._sub_psfflux = None
+        self._sub_psffluxerr = None
+
         self._ref_data = None
         self._ref_weight = None
         self._ref_flags = None
+
         self._new_data = None
         self._new_weight = None
         self._new_flags = None
@@ -184,16 +191,20 @@ class Cutouts(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBa
         super().__setattr__(key, value)
 
     @staticmethod
-    def get_data_attributes():
+    def get_data_attributes(include_optional=True):
         names = ['source_row']
         for im in ['sub', 'ref', 'new']:
             for att in ['data', 'weight', 'flags']:
                 names.append(f'{im}_{att}')
+
+        if include_optional:
+            names += ['sub_psfflux', 'sub_psffluxerr']
+
         return names
 
     @property
     def has_data(self):
-        for att in self.get_data_attributes():
+        for att in self.get_data_attributes(include_optional=False):
             if getattr(self, att) is None:
                 return False
         return True
@@ -281,7 +292,6 @@ class Cutouts(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBa
             filename = os.path.splitext(filename)[0]
 
         filename += '.cutouts_'
-        self.provenance.update_id()
         filename += self.provenance.id[:6]
         if self.format == 'hdf5':
             filename += '.h5'
@@ -310,14 +320,15 @@ class Cutouts(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBa
             if att == 'source_row':
                 continue
 
-            data = getattr(self, att)
-            file.create_dataset(
-                f'{groupname}/{att}',
-                data=data,
-                shape=data.shape,
-                dtype=data.dtype,
-                compression='gzip'
-            )
+            data = getattr(self, f'_{att}')  # get the private attribute so as not to trigger a load upon hitting None
+            if data is not None:
+                file.create_dataset(
+                    f'{groupname}/{att}',
+                    data=data,
+                    shape=data.shape,
+                    dtype=data.dtype,
+                    compression='gzip'
+                )
 
         # handle the source_row dictionary
         target = file[groupname].attrs
@@ -432,8 +443,8 @@ class Cutouts(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBa
         """
         for att in self.get_data_attributes():
             if att == 'source_row':
-                self.source_row = dict(file[f'{groupname}'].attrs)
-            else:
+                self.source_row = dict(file[groupname].attrs)
+            elif att in file[groupname]:
                 setattr(self, att, np.array(file[f'{groupname}/{att}']))
 
         self.format = 'hdf5'
@@ -658,10 +669,10 @@ class Cutouts(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBa
         with SmartSession(session) as session:
             return session.scalars(sa.select(SourceList).where(SourceList.id == self.sources_id)).all()
         
-    def get_downstreams(self, session=None):
-        """Get the downstream Measurements that were made from this Cutouts. """
+    def get_downstreams(self, session=None, siblings=False):
+        """Get the downstream Measurements that were made from this Cutouts object. """
         from models.measurements import Measurements
-        from models.objects import Object
+
         with SmartSession(session) as session:
             return session.scalars(sa.select(Measurements).where(Measurements.cutouts_id == self.id)).all()
 
@@ -746,6 +757,9 @@ class Cutouts(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBa
                     return False
 
         return True
+
+    def _get_inverse_badness(self):
+        return cutouts_badness_inverse
 
 
 # use these two functions to quickly add the "property" accessor methods

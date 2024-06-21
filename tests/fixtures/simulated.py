@@ -9,6 +9,7 @@ import sqlalchemy as sa
 
 from astropy.io import fits
 from astropy.time import Time
+from astropy.wcs import WCS
 
 from models.base import SmartSession
 from models.provenance import Provenance
@@ -16,6 +17,7 @@ from models.exposure import Exposure
 from models.image import Image
 from models.source_list import SourceList
 from models.psf import PSF
+from models.world_coordinates import WorldCoordinates
 from models.zero_point import ZeroPoint
 from models.reference import Reference
 from models.cutouts import Cutouts
@@ -24,6 +26,7 @@ from models.instrument import DemoInstrument
 from improc.tools import make_gaussian
 
 from tests.conftest import rnd_str
+
 
 def make_sim_exposure():
     e = Exposure(
@@ -350,6 +353,8 @@ def sim_image_list(
         fake_sources_data,
         ztf_filepaths_image_sources_psf
 ):
+    ra = np.random.uniform(30, 330)
+    dec = np.random.uniform(-30, 30)
     num = 5
     width = 1.0
     # use the ZTF files to generate a legitimate PSF (that has get_clip())
@@ -376,8 +381,8 @@ def sim_image_list(
             # add some additional products we may need down the line
             im.sources = SourceList(format='filter', data=fake_sources_data)
             # must randomize the sources data to get different MD5sum
-            im.sources.data['x'] += np.random.normal(0, 1, len(fake_sources_data))
-            im.sources.data['y'] += np.random.normal(0, 1, len(fake_sources_data))
+            im.sources.data['x'] += np.random.normal(0, .1, len(fake_sources_data))
+            im.sources.data['y'] += np.random.normal(0, .1, len(fake_sources_data))
 
             for j in range(len(im.sources.data)):
                 dx = im.sources.data['x'][j] - im.raw_data.shape[1] / 2
@@ -404,10 +409,21 @@ def sim_image_list(
             im.zp = ZeroPoint()
             im.zp.zp = np.random.uniform(25, 30)
             im.zp.dzp = np.random.uniform(0.01, 0.1)
-            im.zp.aper_cor_radii = im.instrument_object.standard_apertures()
+            im.zp.aper_cor_radii = [1.0, 2.0, 3.0, 5.0]
             im.zp.aper_cors = np.random.normal(0, 0.1, len(im.zp.aper_cor_radii))
             im.zp.provenance = provenance_extra
+            im.wcs = WorldCoordinates()
+            im.wcs.wcs = WCS()
+            # hack the pixel scale to reasonable values (0.3" per pixel)
+            im.wcs.wcs.wcs.pc = np.array([[0.0001, 0.0], [0.0, 0.0001]])
+            im.wcs.wcs.wcs.crval = np.array([ra, dec])
+            im.wcs.provenance = provenance_extra
+            im.wcs.provenance_id = im.wcs.provenance.id
+            im.wcs.sources = im.sources
+            im.wcs.sources_id = im.sources.id
+            im.wcs.save()
             im.sources.zp = im.zp
+            im.sources.wcs = im.wcs
             im = im.merge_all(session)
             images.append(im)
 
@@ -415,13 +431,16 @@ def sim_image_list(
 
     yield images
 
-    with SmartSession() as session:
+    with SmartSession() as session, warnings.catch_warnings():
+        warnings.filterwarnings(
+            action='ignore',
+            message=r'.*DELETE statement on table .* expected to delete \d* row\(s\).*',
+        )
         for im in images:
             im = im.merge_all(session)
             exp = im.exposure
             im.delete_from_disk_and_database(session=session, commit=False, remove_downstreams=True)
             exp.delete_from_disk_and_database(session=session, commit=False)
-
         session.commit()
 
 
@@ -601,7 +620,6 @@ def sim_sub_image_list(
 
     with SmartSession() as session:
         for sub in sub_images:
-            # sub = sub.merge_all(session)
             sub.delete_from_disk_and_database(session=session, commit=False, remove_downstreams=True)
         session.commit()
 
@@ -611,7 +629,10 @@ def sim_lightcurves(sim_sub_image_list, measurer):
     # a nested list of measurements, each one for a different part of the images,
     # for each image contains a list of measurements for the same source
     measurer.pars.thresholds['bad pixels'] = 100  # avoid losing measurements to random bad pixels
+    measurer.pars.deletion_thresholds['bad pixels'] = 100
     measurer.pars.thresholds['offsets'] = 10  # avoid losing measurements to random offsets
+    measurer.pars.deletion_thresholds['offsets'] = 10
+    measurer.pars.association_radius = 5.0  # make it harder for random offsets to dis-associate the measurements
     lightcurves = []
 
     with SmartSession() as session:

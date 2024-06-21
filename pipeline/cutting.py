@@ -70,7 +70,7 @@ class Cutter:
             self.pars.do_warning_exception_hangup_injection_here()
 
             # get the provenance for this step:
-            prov = ds.get_provenance(self.pars.get_process_name(), self.pars.get_critical_pars(), session=session)
+            prov = ds.get_provenance('cutting', self.pars.get_critical_pars(), session=session)
 
             # try to find some measurements in memory or in the database:
             cutout_list = ds.get_cutouts(prov, session=session)
@@ -84,7 +84,9 @@ class Cutter:
                 detections = ds.get_detections(session=session)
 
                 if detections is None:
-                    raise ValueError(f'Cannot find a source list corresponding to the datastore inputs: {ds.get_inputs()}')
+                    raise ValueError(
+                        f'Cannot find a source list corresponding to the datastore inputs: {ds.get_inputs()}'
+                    )
 
                 cutout_list = []
                 x = detections.x
@@ -93,9 +95,19 @@ class Cutter:
                 sub_stamps_data = make_cutouts(ds.sub_image.data, x, y, sz)
                 sub_stamps_weight = make_cutouts(ds.sub_image.weight, x, y, sz, fillvalue=0)
                 sub_stamps_flags = make_cutouts(ds.sub_image.flags, x, y, sz, fillvalue=0)
+
+                # TODO: figure out if we can actually use this flux (maybe renormalize it)
+                # if ds.sub_image.psfflux is not None and ds.sub_image.psffluxerr is not None:
+                #     sub_stamps_psfflux = make_cutouts(ds.sub_image.psfflux, x, y, sz, fillvalue=0)
+                #     sub_stamps_psffluxerr = make_cutouts(ds.sub_image.psffluxerr, x, y, sz, fillvalue=0)
+                # else:
+                #     sub_stamps_psfflux = None
+                #     sub_stamps_psffluxerr = None
+
                 ref_stamps_data = make_cutouts(ds.sub_image.ref_aligned_image.data, x, y, sz)
                 ref_stamps_weight = make_cutouts(ds.sub_image.ref_aligned_image.weight, x, y, sz, fillvalue=0)
                 ref_stamps_flags = make_cutouts(ds.sub_image.ref_aligned_image.flags, x, y, sz, fillvalue=0)
+
                 new_stamps_data = make_cutouts(ds.sub_image.new_aligned_image.data, x, y, sz)
                 new_stamps_weight = make_cutouts(ds.sub_image.new_aligned_image.weight, x, y, sz, fillvalue=0)
                 new_stamps_flags = make_cutouts(ds.sub_image.new_aligned_image.flags, x, y, sz, fillvalue=0)
@@ -106,14 +118,22 @@ class Cutter:
                     cutout.sub_data = sub_stamps_data[i]
                     cutout.sub_weight = sub_stamps_weight[i]
                     cutout.sub_flags = sub_stamps_flags[i]
+                    # TODO: figure out if we can actually use this flux (maybe renormalize it)
+                    # if sub_stamps_psfflux is not None and sub_stamps_psffluxerr is not None:
+                    #     cutout.sub_psfflux = sub_stamps_psfflux[i]
+                    #     cutout.sub_psffluxerr = sub_stamps_psffluxerr[i]
+
                     cutout.ref_data = ref_stamps_data[i]
                     cutout.ref_weight = ref_stamps_weight[i]
                     cutout.ref_flags = ref_stamps_flags[i]
+
                     cutout.new_data = new_stamps_data[i]
                     cutout.new_weight = new_stamps_weight[i]
                     cutout.new_flags = new_stamps_flags[i]
+
                     cutout._upstream_bitflag = 0
                     cutout._upstream_bitflag |= detections.bitflag
+
                     cutout_list.append(cutout)
 
             # add the resulting list to the data store

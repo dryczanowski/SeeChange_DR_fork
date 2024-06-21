@@ -10,7 +10,7 @@ from improc.tools import make_gaussian
 
 from models.cutouts import Cutouts
 from models.measurements import Measurements
-from models.enums_and_bitflags import BitFlagConverter
+from models.enums_and_bitflags import BitFlagConverter, BadnessConverter
 
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
@@ -39,20 +39,16 @@ class ParsMeasurer(Parameters):
             'adjust the annulus size for each image based on the PSF width. '
         )
 
-        # TODO: should we choose the "best aperture" using the config, or should each Image have its own aperture?
-        self.chosen_aperture = self.add_par(
-            'chosen_aperture',
-            0,
-            [str, int],
-            'The aperture radius that is used for photometry. '
-            'Choose either the index in the aperture_radii list, '
-            'the string "psf", or the string "auto" to choose '
-            'the best aperture in each image separately. '
+        self.use_annulus_for_centroids = self.add_par(
+            'use_annulus_for_centroids',
+            True,
+            bool,
+            'Use the local background measurements via an annulus to adjust the centroids and second moments. '
         )
 
         self.analytical_cuts = self.add_par(
             'analytical_cuts',
-            ['negatives', 'bad pixels', 'offsets', 'filter bank'],
+            ['negatives', 'bad pixels', 'offsets', 'filter bank', 'bad_flag'],
             [list],
             'Which kinds of analytic cuts are used to give scores to this measurement. '
         )
@@ -80,6 +76,14 @@ class ParsMeasurer(Parameters):
             'The same types are ignored when running photometry. '
         )
 
+        self.bad_flag_exclude = self.add_par(
+            'bad_flag_exclude',
+            [],
+            list,
+            'List of strings of the bad flag types (i.e., bitflag) to exclude from the bad flag cut. '
+            'This includes things like image saturation, too many sources, etc. '
+        )
+
         self.streak_filter_angle_step = self.add_par(
             'streak_filter_angle_step',
             5.0,
@@ -102,10 +106,20 @@ class ParsMeasurer(Parameters):
                 'bad pixels': 1,
                 'offsets': 5.0,
                 'filter bank': 1,
+                'bad_flag': 1,
             },
             dict,
-            'Thresholds for the disqualifier scores. '
-            'If the score is higher than (or equal to) the threshold, the measurement is disqualified. '
+            'Failure thresholds for the disqualifier scores. '
+            'If the score is higher than (or equal to) the threshold, the measurement is marked as bad. '
+        )
+
+        self.deletion_thresholds = self.add_par(
+            'deletion_thresholds',
+            None,
+            (dict, None),
+            'Deletion thresholds for the disqualifier scores. '
+            'If the score is higher than (or equal to) the threshold, the measurement is not saved. ',
+            critical=False
         )
 
         self.association_radius = self.add_par(
@@ -169,7 +183,7 @@ class Measurer:
             self.pars.do_warning_exception_hangup_injection_here()
 
             # get the provenance for this step:
-            prov = ds.get_provenance(self.pars.get_process_name(), self.pars.get_critical_pars(), session=session)
+            prov = ds.get_provenance('measuring', self.pars.get_critical_pars(), session=session)
 
             # try to find some measurements in memory or in the database:
             measurements_list = ds.get_measurements(prov, session=session)
@@ -199,6 +213,7 @@ class Measurer:
                     # make sure to remember which cutout belongs to this measurement,
                     # before either of them is in the DB and then use the cutouts_id instead
                     m._cutouts_list_index = i
+                    m.best_aperture = c.sources.best_aper_num
 
                     m.aper_radii = c.sources.image.new_image.zp.aper_cor_radii  # zero point corrected aperture radii
 
@@ -211,54 +226,77 @@ class Measurer:
 
                     annulus_radii_pixels = self.pars.annulus_radii
                     if self.pars.annulus_units == 'fwhm':
-                        annulus_radii_pixels = [rad * c.source.image.get_psf().fwhm_pixels for rad in annulus_radii_pixels]
+                        fwhm = c.source.image.get_psf().fwhm_pixels
+                        annulus_radii_pixels = [rad * fwhm for rad in annulus_radii_pixels]
 
                     # TODO: consider if there are any additional parameters that photometry needs
                     output = iterative_cutouts_photometry(
                         c.sub_data,
                         c.sub_weight,
                         flags,
-                        m.psf,
                         radii=m.aper_radii,
                         annulus=annulus_radii_pixels,
+                        local_bg=self.pars.use_annulus_for_centroids,
                     )
 
-                    m.flux_psf = output['psf_flux']
-                    m.flux_psf_err = output['psf_err']
-                    m.area_psf = output['psf_area']
                     m.flux_apertures = output['fluxes']
-                    m.flux_apertures_err = [np.sqrt(output['variance'] * a) for a in output['areas']]  # TODO: add source noise??
+                    m.flux_apertures_err = [np.sqrt(output['variance']) * norm for norm in output['normalizations']]
                     m.aper_radii = output['radii']
                     m.area_apertures = output['areas']
-                    m.background = output['background']
-                    m.background_err = np.sqrt(output['variance'])
+                    m.bkg_mean = output['background']
+                    m.bkg_std = np.sqrt(output['variance'])
+                    m.bkg_pix = output['n_pix_bg']
                     m.offset_x = output['offset_x']
                     m.offset_y = output['offset_y']
                     m.width = (output['major'] + output['minor']) / 2
                     m.elongation = output['elongation']
                     m.position_angle = output['angle']
 
-                    if self.pars.chosen_aperture == 'auto':
-                        raise NotImplementedError('Automatic aperture selection is not yet implemented.')
-                    if self.pars.chosen_aperture == 'psf':
-                        ap_index = -1
-                    elif isinstance(self.pars.chosen_aperture, int):
-                        ap_index = self.pars.chosen_aperture
-                    else:
-                        raise ValueError(
-                            f'Invalid value "{self.pars.chosen_aperture}" for chosen_aperture in the measuring parameters.'
-                        )
-                    m.best_aperture = ap_index
+                    # update the coordinates using the centroid offsets
+                    x = c.x + m.offset_x
+                    y = c.y + m.offset_y
+                    ra, dec = m.cutouts.sources.image.new_image.wcs.wcs.pixel_to_world_values(x, y)
+                    m.ra = float(ra)
+                    m.dec = float(dec)
 
+                    # PSF photometry:
+                    # Two options: use the PSF flux from ZOGY, or use the new image PSF to measure the flux.
+                    # TODO: this is currently commented out since I don't know how to normalize this flux
+                    # if c.sub_psfflux is not None and c.sub_psffluxerr is not None:
+                    #     ix = int(np.round(m.offset_x + c.sub_data.shape[1] // 2))
+                    #     iy = int(np.round(m.offset_y + c.sub_data.shape[0] // 2))
+                    #
+                    #     # when offsets are so big it really doesn't matter what we put here, it will fail the cuts
+                    #     if ix < 0 or ix >= c.sub_psfflux.shape[1] or iy < 0 or iy >= c.sub_psfflux.shape[0]:
+                    #         m.flux_psf = np.nan
+                    #         m.flux_psf_err = np.nan
+                    #         m.area_psf = np.nan
+                    #     else:
+                    #         m.flux_psf = c.sub_psfflux[iy, ix]
+                    #         m.flux_psf_err = c.sub_psffluxerr[iy, ix]
+                    #         psf = c.sources.image.get_psf()
+                    #         m.area_psf = np.nansum(psf.get_clip(c.x, c.y))
+                    # else:
+                    if np.isnan(ra) or np.isnan(dec):
+                        flux = np.nan
+                        fluxerr = np.nan
+                        area = np.nan
+                    else:
+                        flux, fluxerr, area = m.get_flux_at_point(ra, dec, aperture='psf')
+                    m.flux_psf = flux
+                    m.flux_psf_err = fluxerr
+                    m.area_psf = area
+
+                    # update the provenance
                     m.provenance = prov
                     m.provenance_id = prov.id
 
                     # Apply analytic cuts to each stamp image, to rule out artefacts.
                     m.disqualifier_scores = {}
-                    if m.background != 0 and m.background_err > 0.1:
-                        norm_data = (c.sub_nandata - m.background) / m.background_err  # normalize
+                    if m.bkg_mean != 0 and m.bkg_std > 0.1:
+                        norm_data = (c.sub_nandata - m.bkg_mean) / m.bkg_std  # normalize
                     else:
-                        warnings.warn(f'Background mean= {m.background}, std= {m.background_err}, normalization skipped!')
+                        warnings.warn(f'Background mean= {m.bkg_mean}, std= {m.bkg_std}, normalization skipped!')
                         norm_data = c.sub_nandata  # no good background measurement, do not normalize!
 
                     positives = np.sum(norm_data > self.pars.outlier_sigma)
@@ -291,6 +329,18 @@ class Measurer:
 
                     # TODO: add additional disqualifiers
 
+                    m._upstream_bitflag = 0
+                    m._upstream_bitflag |= c.bitflag
+
+                    ignore_bits = 0
+                    for badness in self.pars.bad_flag_exclude:
+                        ignore_bits |= 2 ** BadnessConverter.convert(badness)
+
+                    m.disqualifier_scores['bad_flag'] = np.bitwise_and(
+                        np.array(m.bitflag).astype('uint64'),
+                        ~np.array(ignore_bits).astype('uint64'),
+                    )
+
                     # make sure disqualifier scores don't have any numpy types
                     for k, v in m.disqualifier_scores.items():
                         if isinstance(v, np.number):
@@ -300,7 +350,9 @@ class Measurer:
 
                 saved_measurements = []
                 for m in measurements_list:
-                    if m.passes():  # all disqualifiers are below threshold
+                    threshold_comparison = self.compare_measurement_to_thresholds(m)
+                    if threshold_comparison != "delete":  # all disqualifiers are below threshold
+                        m.is_bad = threshold_comparison == "bad"
                         saved_measurements.append(m)
 
                 # add the resulting measurements to the data store
@@ -359,3 +411,32 @@ class Measurer:
         self._filter_bank = templates
         self._filter_psf_fwhm = psf_fwhm
 
+    def compare_measurement_to_thresholds(self, m):
+        """Compare measurement disqualifiers of a Measurements object to the thresholds set for 
+        this measurer object.
+
+        Inputs:
+          - m : a Measurements object to be compared
+
+        returns one of three strings to indicate the result
+          - "ok"     : All disqualifiers below both thresholds
+          - "bad"    : Some disqualifiers above mark_thresh but all 
+                       below deletion_thresh
+          - "delete" : Some disqualifiers above deletion_thresh
+        
+        """
+        passing_status = "ok"
+
+        mark_thresh = m.provenance.parameters["thresholds"] # thresholds above which measurement is marked 'bad'
+        deletion_thresh = ( mark_thresh if self.pars.deletion_thresholds is None
+                           else self.pars.deletion_thresholds )
+
+        combined_keys = np.unique(list(mark_thresh.keys()) + list(deletion_thresh.keys())) # unique keys from both
+        for key in combined_keys:
+            if deletion_thresh.get(key) is not None and m.disqualifier_scores[key] >= deletion_thresh[key]:
+                passing_status =  "delete"
+                break
+            if mark_thresh.get(key) is not None and m.disqualifier_scores[key] >= mark_thresh[key]:
+                passing_status = "bad" # no break because another key could trigger "delete"
+
+        return passing_status

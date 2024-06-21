@@ -4,7 +4,6 @@ import pytest
 import uuid
 import shutil
 import pathlib
-import logging
 
 import numpy as np
 
@@ -21,7 +20,7 @@ from models.base import (
 from models.provenance import CodeVersion, Provenance
 from models.catalog_excerpt import CatalogExcerpt
 from models.exposure import Exposure
-from models.objects import Object
+from models.object import Object
 
 from util.archive import Archive
 from util.util import remove_empty_folders
