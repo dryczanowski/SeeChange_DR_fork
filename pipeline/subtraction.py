@@ -1,19 +1,21 @@
-import os
 import time
 import numpy as np
+
+import sqlalchemy as sa
 
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
 
 from models.base import SmartSession
 from models.image import Image
+from models.refset import RefSet
 
 from improc.zogy import zogy_subtract, zogy_add_weights_flags
 from improc.inpainting import Inpainter
 from improc.alignment import ImageAligner
 from improc.tools import sigma_clipping
 
-from util.util import parse_bool
+from util.util import env_as_bool
 
 
 class ParsSubtractor(Parameters):
@@ -26,9 +28,16 @@ class ParsSubtractor(Parameters):
             'Which subtraction method to use. Possible values are: "hotpants", "zogy". '
         )
 
+        self.refset = self.add_par(
+            'refset',
+            None,
+            (None, str),
+            'The name of the reference set to use for getting a reference image. '
+        )
+
         self.alignment = self.add_par(
             'alignment',
-            {'method:': 'swarp', 'to_index': 'new'},
+            {'method': 'swarp', 'to_index': 'new'},
             dict,
             'How to align the reference image to the new image. This will be ingested by ImageAligner. '
         )
@@ -190,6 +199,9 @@ class Subtractor:
         output['outwt'] = outwt
         output['outfl'] = outfl
 
+        # convert flux based into magnitude based zero point
+        output['zero_point'] = 2.5 * np.log10(output['zero_point'])
+
         return output
 
     def _subtract_hotpants(self, new_image, ref_image):
@@ -234,7 +246,7 @@ class Subtractor:
 
         try:
             t_start = time.perf_counter()
-            if parse_bool(os.getenv('SEECHANGE_TRACEMALLOC')):
+            if env_as_bool('SEECHANGE_TRACEMALLOC'):
                 import tracemalloc
                 tracemalloc.reset_peak()  # start accounting for the peak memory usage from here
 
@@ -242,8 +254,16 @@ class Subtractor:
 
             # get the provenance for this step:
             with SmartSession(session) as session:
-                # look for a reference that has to do with the current image
-                ref = ds.get_reference(session=session)
+                # look for a reference that has to do with the current image and refset
+                if self.pars.refset is None:
+                    raise ValueError('No reference set given for subtraction')
+                refset = session.scalars(sa.select(RefSet).where(RefSet.name == self.pars.refset)).first()
+                if refset is None:
+                    raise ValueError(f'Cannot find a reference set with name {self.pars.refset}')
+
+                # TODO: we can add additional parameters of get_reference() that come from
+                #  the subtraction config, such as skip_bad, match_filter, ignore_target_and_section, min_overlap
+                ref = ds.get_reference(refset.provenances, session=session)
                 if ref is None:
                     raise ValueError(
                         f'Cannot find a reference image corresponding to the datastore inputs: {ds.get_inputs()}'
@@ -268,57 +288,77 @@ class Subtractor:
                     sub_image.provenance_id = prov.id
                     sub_image.coordinates_to_alignment_target()  # make sure the WCS is aligned to the correct image
 
-                    # make sure to grab the correct aligned images
-                    new_image = [im for im in sub_image.aligned_images if im.mjd == sub_image.new_image.mjd]
-                    if len(new_image) != 1:
-                        raise ValueError('Cannot find the new image in the aligned images')
-                    new_image = new_image[0]
+                    # Need to make sure the upstream images are loaded into this session before
+                    # we disconnect it from the database.  (We don't want to hold the database
+                    # connection open through all the slow processes below.)
+                    upstream_images = sub_image.upstream_images
 
-                    ref_image = [im for im in sub_image.aligned_images if im.mjd == sub_image.ref_image.mjd]
-                    if len(ref_image) != 1:
-                        raise ValueError('Cannot find the reference image in the aligned images')
-                    ref_image = ref_image[0]
+            if self.has_recalculated:
+                # make sure to grab the correct aligned images
+                new_image = [im for im in sub_image.aligned_images if im.mjd == sub_image.new_image.mjd]
+                if len(new_image) != 1:
+                    raise ValueError('Cannot find the new image in the aligned images')
+                new_image = new_image[0]
 
-                    if self.pars.method == 'naive':
-                        outdict = self._subtract_naive(new_image, ref_image)
-                    elif self.pars.method == 'hotpants':
-                        outdict = self._subtract_hotpants(new_image, ref_image)
-                    elif self.pars.method == 'zogy':
-                        outdict = self._subtract_zogy(new_image, ref_image)
-                    else:
-                        raise ValueError(f'Unknown subtraction method {self.pars.method}')
+                ref_image = [im for im in sub_image.aligned_images if im.mjd == sub_image.ref_image.mjd]
+                if len(ref_image) != 1:
+                    raise ValueError('Cannot find the reference image in the aligned images')
+                ref_image = ref_image[0]
 
-                    sub_image.data = outdict['outim']
-                    sub_image.weight = outdict['outwt']
-                    sub_image.flags = outdict['outfl']
-                    if 'score' in outdict:
-                        sub_image.score = outdict['score']
-                    if 'alpha' in outdict:
+                if self.pars.method == 'naive':
+                    outdict = self._subtract_naive(new_image, ref_image)
+                elif self.pars.method == 'hotpants':
+                    outdict = self._subtract_hotpants(new_image, ref_image)
+                elif self.pars.method == 'zogy':
+                    outdict = self._subtract_zogy(new_image, ref_image)
+                else:
+                    raise ValueError(f'Unknown subtraction method {self.pars.method}')
+
+                sub_image.data = outdict['outim']
+                sub_image.weight = outdict['outwt']
+                sub_image.flags = outdict['outfl']
+                if 'score' in outdict:
+                    sub_image.score = outdict['score']
+                if 'alpha' in outdict:
+                    sub_image.psfflux = outdict['alpha']
+                if 'alpha_err' in outdict:
+                    sub_image.psffluxerr = outdict['alpha_err']
+                if 'psf' in outdict:
+                    # TODO: clip the array to be a cutout around the PSF, right now it is same shape as image!
+                    sub_image.zogy_psf = outdict['psf']  # not saved, can be useful for testing / source detection
+                    if 'alpha' in outdict and 'alpha_err' in outdict:
                         sub_image.psfflux = outdict['alpha']
-                    if 'alpha_err' in outdict:
                         sub_image.psffluxerr = outdict['alpha_err']
-                    if 'psf' in outdict:
-                        # TODO: clip the array to be a cutout around the PSF, right now it is same shape as image!
-                        sub_image.zogy_psf = outdict['psf']  # not saved, can be useful for testing / source detection
-                        if 'alpha' in outdict and 'alpha_err' in outdict:
-                            sub_image.psfflux = outdict['alpha']
-                            sub_image.psffluxerr = outdict['alpha_err']
 
-                    sub_image.subtraction_output = outdict  # save the full output for debugging
+                sub_image.subtraction_output = outdict  # save the full output for debugging
 
-            if sub_image._upstream_bitflag is None:
-                sub_image._upstream_bitflag = 0
-            sub_image._upstream_bitflag |= ds.sources.bitflag
+                # TODO: can we get better estimates from our subtraction outdict? Issue #312
+                sub_image.fwhm_estimate = new_image.fwhm_estimate
+                # if the subtraction does not provide an estimate of the ZP, use the one from the new image
+                sub_image.zero_point_estimate = outdict.get('zero_point', new_image.zp.zp)
+                sub_image.lim_mag_estimate = new_image.lim_mag_estimate
+
+                # if the subtraction does not provide an estimate of the background, use sigma clipping
+                if 'bkg_mean' not in outdict or 'bkg_rms' not in outdict:
+                    mu, sig = sigma_clipping(sub_image.data)
+                    sub_image.bkg_mean_estimate = outdict.get('bkg_mean', mu)
+                    sub_image.bkg_rms_estimate = outdict.get('bkg_rms', sig)
+
+            sub_image._upstream_bitflag = 0
             sub_image._upstream_bitflag |= ds.image.bitflag
+            sub_image._upstream_bitflag |= ds.sources.bitflag
+            sub_image._upstream_bitflag |= ds.psf.bitflag
+            sub_image._upstream_bitflag |= ds.bg.bitflag
             sub_image._upstream_bitflag |= ds.wcs.bitflag
             sub_image._upstream_bitflag |= ds.zp.bitflag
+
             if 'ref_image' in locals():
                 sub_image._upstream_bitflag |= ref_image.bitflag
 
             ds.sub_image = sub_image
 
             ds.runtimes['subtraction'] = time.perf_counter() - t_start
-            if parse_bool(os.getenv('SEECHANGE_TRACEMALLOC')):
+            if env_as_bool('SEECHANGE_TRACEMALLOC'):
                 import tracemalloc
                 ds.memory_usages['subtraction'] = tracemalloc.get_traced_memory()[1] / 1024 ** 2  # in MB
 
