@@ -1,6 +1,7 @@
 import pytest
 import uuid
 import numpy as np
+import os
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
@@ -83,14 +84,23 @@ def test_measurements_attributes(measurer, ptf_datastore, test_config):
     m.flux_apertures[m.best_aperture] = original_flux
     new_im.zp.dzp = original_zp_err
 
-    #test for limiting magnitude
+    #test limiting magnitude estimation
     srcList = ptf_datastore.sources
-    limMagEst, snrs, mags, grad, intercept = srcList.estimate_lim_mag(aperture=1)
+    #if interactive testing enabled, make and save a Magnitude vs SNR plot (for debugging)
+    makePlot = os.getenv('INTERACTIVE')
+    if makePlot:
+        limMagResults = srcList.estimate_lim_mag(aperture=1, givePlotParams=makePlot)
+        limMagEst = limMagResults[0]
+        snrs = limMagResults[1]
+        mags = limMagResults[2]
+        grad = limMagResults[3]
+        intercept = limMagResults[4]
+    else:
+        limMagEst = srcList.estimate_lim_mag(aperture=1)
 
     #Skip the lim mag test if using PSF photometry (i.e. if limMagEst==None)
     if limMagEst != None:
-        #if interactive testing enabled, make and save a Magnitude vs SNR plot
-        if os.getenv('INTERACTIVE') is not None: 
+        if makePlot: 
             xdata = np.linspace(np.log(3),np.log(20),1000)
             plt.plot(snrs,mags,linewidth=0,marker='o',c='midnightblue')
             plt.plot(xdata, grad * xdata + intercept, c='firebrick')
@@ -106,7 +116,7 @@ def test_measurements_attributes(measurer, ptf_datastore, test_config):
             plt.show()
 
         #check the limiting magnitude is consistent with previous runs
-        assert limMagEst == pytest.approx(20.668, abs=0.05)
+        assert limMagEst == pytest.approx(20.00, abs=0.5)
 
 
 

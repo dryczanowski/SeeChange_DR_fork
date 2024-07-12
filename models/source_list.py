@@ -506,12 +506,12 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         return -2.5 * np.log10( meanrat )
 
-    def estimate_lim_mag(self, aperture=1):
+    def estimate_lim_mag(self, aperture=1, givePlotParams=False):
         # if aperture = -1: using psf mags, aperture defaults to 1
-        if aperture >= 0:
+        # image must also have zero point
+        if aperture >= 0 and self.zp != None:
             aperCorr = self.calc_aper_cor(aperture)
             zeroPoint = self.zp.zp
-            # import pdb; pdb.set_trace()
             flux, fluxerr = self.apfluxadu(aperture)
             mags = -2.5 * np.log10(flux) + zeroPoint + aperCorr
             snr = flux/fluxerr
@@ -522,9 +522,14 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             m,c = np.polyfit(snrMasked,magsMasked,1) #calculate slope and intercept of fitted line
             limMagEst = m * np.log(5) + c #limiting magnitude estimate at SNR = 5
 
-            return limMagEst, snrMasked, magsMasked, m, c
+            if givePlotParams:
+                return limMagEst, snrMasked, magsMasked, m, c
+            else:
+                return limMagEst
+                
         else:
-            print('Using psf flux: Will not provide limiting magnitude estimate')
+            #Will not provide limiting magnitude estimate if using PSF photometry 
+            #or if no zero point
             limMagEst = None
             return limMagEst
 
