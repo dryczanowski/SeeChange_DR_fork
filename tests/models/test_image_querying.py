@@ -581,7 +581,6 @@ def test_image_query(ptf_ref, decam_reference, decam_datastore, decam_default_ca
         assert len(results4) == 2
         assert results4[0].mjd == results4[1].mjd  # same time, as one is a coadd of the other images
         assert results4[0].instrument == 'PTF'
-        import pdb; pdb.set_trace()
         # assert results4[0].type == 'ComSci'  # the first one out is the high quality coadd
         # assert results4[1].type == 'Sci'  # the second one is the regular image
         assert results4[0].type == 'Sci'  # the first one out is the regular image
