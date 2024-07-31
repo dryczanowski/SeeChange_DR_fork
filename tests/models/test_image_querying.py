@@ -552,7 +552,7 @@ def test_image_query(ptf_ref, decam_reference, decam_datastore, decam_default_ca
         assert len(results3) == 0  # we will never have exactly that number
 
         # filter by limiting magnitude
-        value = 22.0
+        value = 21.0
         stmt = Image.query_images(min_lim_mag=value)
         results1 = session.scalars(stmt).all()
         assert all(im.instrument == 'DECam' for im in results1)
@@ -712,7 +712,7 @@ def test_image_query(ptf_ref, decam_reference, decam_datastore, decam_default_ca
         # assert results4[1].type == 'Sci'  # the second one is the regular image
         assert results4[0].type == 'Sci'  # the first one out is the regular image
         assert results4[1].type == 'ComSci'  # the second one is the high quality coadd
-        import pdb; pdb.set_trace()
+
         # check that the DECam difference and new image it is based on have the same limiting magnitude and quality
         stmt = Image.query_images(instrument='DECam', type=3)
         diff = session.scalars(stmt).first()
