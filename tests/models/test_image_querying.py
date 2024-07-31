@@ -552,7 +552,7 @@ def test_image_query(ptf_ref, decam_reference, decam_datastore, decam_default_ca
         assert len(results3) == 0  # we will never have exactly that number
 
         # filter by limiting magnitude
-        value = 22.0
+        value = 21.0
         stmt = Image.query_images(min_lim_mag=value)
         results1 = session.scalars(stmt).all()
         assert all(im.instrument == 'DECam' for im in results1)
@@ -708,11 +708,64 @@ def test_image_query(ptf_ref, decam_reference, decam_datastore, decam_default_ca
         assert len(results4) == 2
         assert results4[0].mjd == results4[1].mjd  # same time, as one is a coadd of the other images
         assert results4[0].instrument == 'PTF'
+        # TODO: Figure out why quality of coadd is significantly below that of regular image
         # assert results4[0].type == 'ComSci'  # the first one out is the high quality coadd
         # assert results4[1].type == 'Sci'  # the second one is the regular image
         assert results4[0].type == 'Sci'  # the first one out is the regular image
         assert results4[1].type == 'ComSci'  # the second one is the high quality coadd
+        # import pdb; pdb.set_trace()
+
+        from models.source_list import SourceList
+        from models.zero_point import ZeroPoint
+        import matplotlib.pyplot as plt
+
+        sl1 = session.query(SourceList).filter(SourceList.image_id==results4[0].id).all()[0]
+        sl2 = session.query(SourceList).filter(SourceList.image_id==results4[1].id).all()[0]
+        zp1 = session.query(ZeroPoint).filter(ZeroPoint.sources_id==sl1.id).first()
+        zp2 = session.query(ZeroPoint).filter(ZeroPoint.sources_id==sl2.id).first()
         import pdb; pdb.set_trace()
+        # limMagResults = sl1.estimate_lim_mag(zp=zp1,aperture=1, givePlotParams=True)
+        # limMagEst = limMagResults[0]
+        # snrs = limMagResults[1]
+        # mags = limMagResults[2]
+        # grad = limMagResults[3]
+        # intercept = limMagResults[4]
+
+        # xdata = np.linspace(np.log(3),np.log(20),1000)
+        # plt.plot(snrs,mags,linewidth=0,marker='o',c='midnightblue')
+        # plt.plot(xdata, grad * xdata + intercept, c='firebrick')
+        # plt.xlabel('log SNR')
+        # plt.ylabel('magnitude')
+        # plt.title('Limiting magntiude = {:.2f} mag'.format(limMagEst))
+        # ymin,ymax = plt.gca().get_ylim()
+        # plt.vlines(x=np.log(5),ymin=ymin,ymax=ymax)
+        # plt.hlines(y=limMagEst,xmin=np.log(3),xmax=np.log(20))
+        # plt.xlim(np.log(3),np.log(20))
+        # plt.ylim(ymin,ymax)
+        # plt.savefig('plots/snr_mag_plot_1.png')
+        # plt.show()
+
+        limMagResults = sl2.estimate_lim_mag(zp=zp2,aperture=1, givePlotParams=True)
+        limMagEst = limMagResults[0]
+        snrs = limMagResults[1]
+        mags = limMagResults[2]
+        grad = limMagResults[3]
+        intercept = limMagResults[4]
+
+        xdata = np.linspace(np.log(3),np.log(20),1000)
+        plt.plot(snrs,mags,linewidth=0,marker='o',c='midnightblue')
+        plt.plot(xdata, grad * xdata + intercept, c='firebrick')
+        plt.xlabel('log SNR')
+        plt.ylabel('magnitude')
+        plt.title('Limiting magntiude = {:.2f} mag'.format(limMagEst))
+        ymin,ymax = plt.gca().get_ylim()
+        plt.vlines(x=np.log(5),ymin=ymin,ymax=ymax)
+        plt.hlines(y=limMagEst,xmin=np.log(3),xmax=np.log(20))
+        plt.xlim(np.log(3),np.log(20))
+        plt.ylim(ymin,ymax)
+        plt.savefig('plots/snr_mag_plot_2.png')
+        plt.show()
+
         # check that the DECam difference and new image it is based on have the same limiting magnitude and quality
         stmt = Image.query_images(instrument='DECam', type=3)
         diff = session.scalars(stmt).first()
