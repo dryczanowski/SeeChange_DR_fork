@@ -506,12 +506,13 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         return -2.5 * np.log10( meanrat )
 
-    def estimate_lim_mag(self, aperture=1, givePlotParams=False):
+    def estimate_lim_mag(self, zp=None, aperture=1, givePlotParams=False):
         # if aperture = -1: using psf mags, aperture defaults to 1
         # image must also have zero point
-        if aperture >= 0 and self.zp != None:
+        zp = self.zp if zp is None else zp
+        if aperture >= 0 and zp != None:
             aperCorr = self.calc_aper_cor(aperture)
-            zeroPoint = self.zp.zp
+            zeroPoint = zp.zp
             flux, fluxerr = self.apfluxadu(aperture)
             mags = -2.5 * np.log10(flux) + zeroPoint + aperCorr
             snr = flux/fluxerr
