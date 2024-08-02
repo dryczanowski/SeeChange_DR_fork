@@ -86,71 +86,12 @@ def test_measurements_attributes(measurer, ptf_datastore, test_config):
 
     #test limiting magnitude estimation
     srcList = ptf_datastore.sources
-    #if interactive testing enabled, make and save a Magnitude vs SNR plot (for debugging)
-    makePlot = os.getenv('INTERACTIVE')
-    if makePlot:
-        limMagResults = srcList.estimate_lim_mag(aperture=1, givePlotParams=makePlot)
-        limMagEst = limMagResults[0]
-        snrs = limMagResults[1]
-        mags = limMagResults[2]
-        grad = limMagResults[3]
-        intercept = limMagResults[4]
-    else:
-        limMagEst = srcList.estimate_lim_mag(aperture=1)
 
-    #Skip the lim mag test if using PSF photometry (i.e. if limMagEst==None)
-    if limMagEst != None:
-        if makePlot: 
-            xdata = np.linspace(np.log(3),np.log(20),1000)
-            plt.plot(snrs,mags,linewidth=0,marker='o',c='midnightblue')
-            plt.plot(xdata, grad * xdata + intercept, c='firebrick')
-            plt.xlabel('log SNR')
-            plt.ylabel('magnitude')
-            plt.title('Limiting magntiude = {:.2f} mag'.format(limMagEst))
-            ymin,ymax = plt.gca().get_ylim()
-            plt.vlines(x=np.log(5),ymin=ymin,ymax=ymax)
-            plt.hlines(y=limMagEst,xmin=np.log(3),xmax=np.log(20))
-            plt.xlim(np.log(3),np.log(20))
-            plt.ylim(ymin,ymax)
-            plt.savefig('plots/snr_mag_plot.png')
-            plt.show()
+    # make and save a Magnitude vs SNR (limiting mag) plot
+    limMagEst = srcList.estimate_lim_mag(aperture=1,savePlot='snr_mag_plot.png')
 
-        #check the limiting magnitude is consistent with previous runs
-        assert limMagEst == pytest.approx(20.00, abs=0.5)
-
-    from pipeline.data_store import DataStore
-    from models.source_list import SourceList
-    from models.base import SmartSession
-
-    with SmartSession() as session:
-        ds = DataStore(image_id=1126)
-        im = ds.get_image()
-        # sl = ds.get_sources()
-        sl = (session.query( SourceList ).filter( SourceList.image_id==1126 ).all())[0]
-        import pdb; pdb.set_trace()
-        limMagResults = sl.estimate_lim_mag(aperture=1, givePlotParams=True)
-        limMagEst = limMagResults[0]
-        snrs = limMagResults[1]
-        mags = limMagResults[2]
-        grad = limMagResults[3]
-        intercept = limMagResults[4]
-
-        xdata = np.linspace(np.log(3),np.log(20),1000)
-        plt.plot(snrs,mags,linewidth=0,marker='o',c='midnightblue')
-        plt.plot(xdata, grad * xdata + intercept, c='firebrick')
-        plt.xlabel('log SNR')
-        plt.ylabel('magnitude')
-        plt.title('Limiting magntiude = {:.2f} mag'.format(limMagEst))
-        ymin,ymax = plt.gca().get_ylim()
-        plt.vlines(x=np.log(5),ymin=ymin,ymax=ymax)
-        plt.hlines(y=limMagEst,xmin=np.log(3),xmax=np.log(20))
-        plt.xlim(np.log(3),np.log(20))
-        plt.ylim(ymin,ymax)
-        plt.savefig('plots/snr_mag_plot_db.png')
-        plt.show()
-        # import pdb; pdb.set_trace()
-
-
+    #check the limiting magnitude is consistent with previous runs
+    assert limMagEst == pytest.approx(20.00, abs=0.5)
 
 def test_filtering_measurements(ptf_datastore):
     measurements = ptf_datastore.measurements
